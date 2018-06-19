@@ -87,12 +87,16 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 			kv := ri.MustGet()
 			t, _ := tuple.Unpack(kv.Key)
 			if t[3] != "count" {
-				id := bson.ObjectId(kv.Value)
-				lengthKey := objectDir.Pack(tuple.Tuple{[]byte(id), "len"})
+				_id := bson.ObjectId(kv.Value)
+				id := []byte(_id)
+				lengthKey := objectDir.Pack(tuple.Tuple{id, "len"})
 				lengthValueFuture := tr.Get(lengthKey)
 
-				partialKey := objectDir.Pack(tuple.Tuple{[]byte(id), "partial"})
+				partialKey := objectDir.Pack(tuple.Tuple{id, "partial"})
 				partialValueFuture := tr.Get(partialKey)
+
+				uploadDateKey := objectDir.Pack(tuple.Tuple{id, "meta", "uploadDate"})
+				uploadDateFuture := tr.Get(uploadDateKey)
 
 				v, err := tuple.Unpack(lengthValueFuture.MustGet())
 				if err != nil {
@@ -107,7 +111,15 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 					partialMark = "*"
 				}
 
-				fmt.Printf("%s %s\t%s %d\t%s%s\n", id, t[1], id.Time().Format("2006-01-02T15:04:05-0700"), length, t[2], partialMark)
+				var uploadDate time.Time
+				v, err = tuple.Unpack(uploadDateFuture.MustGet())
+				if err != nil || v == nil {
+					uploadDate = _id.Time()
+				} else {
+					ns := v[0].(int64)
+					uploadDate = time.Unix(ns/1000000000, ns%1000000000)
+				}
+				fmt.Printf("%s %s\t%s %d\t%s%s\n", _id, t[1], uploadDate.Format("2006-01-02T15:04:05.000000000-0700"), length, t[2], partialMark)
 			}
 		}
 		return nil, nil
