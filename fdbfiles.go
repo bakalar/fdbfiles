@@ -496,6 +496,9 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
 						tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+						for key, value := range tags {
+							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
+						}
 					}
 					n, err := f.Read(contentBuffer)
 					if err != nil && err != io.EOF {
