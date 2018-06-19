@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 const chunkSize = 100000
@@ -32,7 +33,7 @@ func usage() {
 	fmt.Printf("Usage: %s [OPTION]... [COMMAND [NAME_OR_ID...]]\n\n", os.Args[0])
 	fmt.Println("Manipulate FoundationDB Object Store using the command line.")
 	fmt.Println("\nPossible commands include:")
-	fmt.Println("\tlist\t\tlist all files; NAME is an optional prefix which listed filenames must begin with")
+	fmt.Println("\tlist\t\tlist files; NAME is an optional prefix which listed filenames must begin with")
 	//fmt.Println("\tsearch\t\tsearch all files; NAME is a substring which listed filenames must contain")
 	fmt.Println("\tput\t\tadd files with given names")
 	fmt.Println("\tput_id\t\tadd files with given ids")
@@ -409,6 +410,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
 						tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+						tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
 						for key, value := range tags {
 							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
 						}
@@ -496,6 +498,7 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
 						tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+						tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
 						for key, value := range tags {
 							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
 						}
