@@ -3,31 +3,35 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/apple/foundationdb/bindings/go/src/fdb"
-	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
-	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
-	"gopkg.in/mgo.v2/bson"
 	"io"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/apple/foundationdb/bindings/go/src/fdb"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
+	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
+	"github.com/cloudflare/golz4"
+	"gopkg.in/mgo.v2/bson"
 )
 
 const (
-	chunkSize                  = 100000
-	chunksPerTransaction int64 = 99
+	chunkSize                         = 100000
+	chunksPerTransaction        int64 = 99
+	defaultCompressionAlgorithm       = 1
 )
 
 var (
-	one          = []byte{1, 0, 0, 0, 0, 0, 0, 0}
-	objectPath   = []string{"object"}
-	indexDirPath = []string{"object", "index", "name"}
+	one                   = []byte{1, 0, 0, 0, 0, 0, 0, 0}
+	objectPath            = []string{"object"}
+	indexDirPath          = []string{"object", "index", "name"}
+	compressionAlgorithms = []string{"none", "lz4"}
 )
 
 func lengthToChunkCount(length int64) int64 {
 	count := length / chunkSize
-	if (length % chunkSize) != 0 {
-		count += 1
+	if length%chunkSize != 0 {
+		count++
 	}
 	return count
 }
@@ -50,10 +54,11 @@ func usage() {
 	fmt.Println("\t--version\tprint the tool version and exit")
 	fmt.Println("\nstorage options:")
 	fmt.Println("\t--all_buckets\t\tshow all FoundationDB Object Store buckets when using list command")
-	fmt.Println("\t--bucket=BUCKET\t\tFoundationDB Object Store bucket to use (default: objectstorage1)")
+	fmt.Println("\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
+	fmt.Println("\t--bucket=BUCKET\t\tFoundationDB Object Store bucket to use (default: 'objectstorage1')")
 	fmt.Println("\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
 	fmt.Println("\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
-	fmt.Println("\t--local=FILENAME\tlocal filename to use")
+	fmt.Println("\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
 }
 
 func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
@@ -184,7 +189,7 @@ func delete(db fdb.Database, bucketName string, names []string, finishChannel ch
 	}
 }
 
-func delete_id(db fdb.Database, ids []string, finishChannel chan bool) {
+func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
 			db.Transact(func(tr fdb.Transaction) (interface{}, error) {
@@ -239,7 +244,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 			var f *os.File
 			var id []byte
 			print := localName == "-"
-			var chunk int64 = 0
+			var chunk int64
 			if !print {
 				var path string
 				if len(names) == 1 && len(localName) > 0 {
@@ -287,7 +292,25 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 					}
 					for chunk < chunkCount {
 						key := dir.Pack(tuple.Tuple{id, chunk})
-						bytes := tr.Get(key).MustGet()
+						bytesFuture := tr.Get(key)
+						compressionKey := dir.Pack(tuple.Tuple{[]byte(id), chunk, "c"})
+						compressionAlgoFuture := tr.Get(compressionKey)
+						bytes := bytesFuture.MustGet()
+						v, err := tuple.Unpack(compressionAlgoFuture.MustGet())
+						if err == nil {
+							switch v[0].(int64) {
+							case 1: // lz4
+								var uncompressedSize int64
+								if chunk+1 == chunkCount {
+									uncompressedSize = length % chunkSize
+								} else {
+									uncompressedSize = chunkSize
+								}
+								uncompressed := make([]byte, uncompressedSize)
+								lz4.Uncompress(bytes, uncompressed)
+								bytes = uncompressed
+							}
+						}
 						if print {
 							fmt.Print(string(bytes))
 						} else {
@@ -296,7 +319,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 								panic(err)
 							}
 						}
-						chunk += 1
+						chunk++
 						if print || chunk%chunksPerTransaction == 0 {
 							break
 						}
@@ -312,7 +335,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 	}
 }
 
-func get_id(localName string, db fdb.Database, ids []string, finishChannel chan bool) {
+func getID(localName string, db fdb.Database, ids []string, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
 			_id := bson.ObjectIdHex(id)
@@ -320,7 +343,7 @@ func get_id(localName string, db fdb.Database, ids []string, finishChannel chan 
 			var chunkCount int64
 			var f *os.File
 			print := localName == "-"
-			var chunk int64 = 0
+			var chunk int64
 			if !print {
 				var path string
 				if len(ids) == 1 && len(localName) > 0 {
@@ -353,7 +376,25 @@ func get_id(localName string, db fdb.Database, ids []string, finishChannel chan 
 					}
 					for chunk < chunkCount {
 						key := dir.Pack(tuple.Tuple{[]byte(_id), chunk})
-						bytes := tr.Get(key).MustGet()
+						bytesFuture := tr.Get(key)
+						compressionKey := dir.Pack(tuple.Tuple{[]byte(_id), chunk, "c"})
+						compressionAlgoFuture := tr.Get(compressionKey)
+						bytes := bytesFuture.MustGet()
+						v, err := tuple.Unpack(compressionAlgoFuture.MustGet())
+						if err == nil {
+							switch v[0].(int64) {
+							case 1: // lz4
+								var uncompressedSize int64
+								if chunk+1 == chunkCount {
+									uncompressedSize = length % chunkSize
+								} else {
+									uncompressedSize = chunkSize
+								}
+								uncompressed := make([]byte, uncompressedSize)
+								lz4.Uncompress(bytes, uncompressed)
+								bytes = uncompressed
+							}
+						}
 						if print {
 							fmt.Print(string(bytes))
 						} else {
@@ -362,7 +403,7 @@ func get_id(localName string, db fdb.Database, ids []string, finishChannel chan 
 								panic(err)
 							}
 						}
-						chunk += 1
+						chunk++
 						if print || chunk%chunksPerTransaction == 0 {
 							break
 						}
@@ -385,16 +426,9 @@ func min(a int64, b int64) int64 {
 	return b
 }
 
-func transactionCountFromChunkCount(chunkCount int64) int64 {
-	count := chunkCount / chunksPerTransaction
-	if chunkCount%chunksPerTransaction != 0 {
-		count += 1
-	}
-	return count
-}
-
-func put(localName string, db fdb.Database, bucketName string, uniqueNames map[string]bool, tags map[string]string, verbose bool, finishChannel chan bool) {
-	for name1, _ := range uniqueNames {
+func put(localName string, db fdb.Database, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
+	compressionAlgoValue := tuple.Tuple{compressionAlgorithm}.Pack()
+	for name1 := range uniqueNames {
 		go func(name string) {
 			var filename string
 			if len(uniqueNames) == 1 && len(localName) > 0 {
@@ -413,16 +447,14 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			}
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
-			var totalWritten int64 = 0
+			var totalWritten int64
 			var id []byte
 			contentBuffer := make([]byte, chunkSize)
-			transactionCount := transactionCountFromChunkCount(chunkCount)
-			var chunk int64 = 0
-			chunkIndexForNextTransaction := chunksPerTransaction
+			var chunk int64
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
-			for transactionIndex := int64(0); transactionIndex < transactionCount || (totalSize == 0 && transactionIndex == 0); transactionIndex += 1 {
+			for {
 				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 					dir, err := directory.CreateOrOpen(tr, objectPath, nil)
 					if err != nil {
@@ -452,7 +484,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 						}
 						tr.Add(countKey, one)
 						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
-						if transactionCount > 1 {
+						if chunkCount > chunksPerTransaction {
 							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						}
 						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
@@ -462,8 +494,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 						}
 					}
 					if totalSize > 0 {
-						maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
-						for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
+						for {
 							n, err := f.Read(contentBuffer)
 							if err != nil && err != io.EOF {
 								panic(err)
@@ -472,12 +503,27 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 								fmt.Printf("Failed writing chunk %d./%d: written only %d/%d bytes.\n", chunk+1, chunkCount, n, chunkSize)
 								panic("Failed writing chunk.")
 							}
-							tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
+							switch compressionAlgorithm {
+							case 0: // none
+								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
+							case 1: // lz4
+								compressed := make([]byte, lz4.CompressBound(contentBuffer[:n]))
+								compressedByteCount, err := lz4.Compress(contentBuffer[:n], compressed)
+								if err != nil {
+									panic(err)
+								}
+								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
+								tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
+							}
 							totalWritten += int64(n)
+							chunk++
+							if chunk == chunkCount || chunk%chunksPerTransaction == 0 {
+								break
+							}
 						}
 					}
 					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
-					if transactionIndex+1 == transactionCount {
+					if chunk == chunkCount && chunkCount > chunksPerTransaction {
 						// Last transaction
 						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
@@ -486,15 +532,18 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 				if verbose {
 					fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
 				}
-				chunkIndexForNextTransaction += chunksPerTransaction
+				if chunk == chunkCount {
+					break
+				}
 			}
 			finishChannel <- true
 		}(name1)
 	}
 }
 
-func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[string]bool, tags map[string]string, verbose bool, finishChannel chan bool) {
-	for id1, _ := range uniqueIds {
+func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
+	compressionAlgoValue := tuple.Tuple{compressionAlgorithm}.Pack()
+	for id1 := range uniqueIds {
 		go func(idString string) {
 			id := []byte(bson.ObjectIdHex(idString))
 			var filename string
@@ -514,16 +563,14 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 			}
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
-			var totalWritten int64 = 0
+			var totalWritten int64
 
 			contentBuffer := make([]byte, chunkSize)
-			transactionCount := transactionCountFromChunkCount(chunkCount)
-			var chunk int64 = 0
-			chunkIndexForNextTransaction := chunksPerTransaction
+			var chunk int64
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
-			for transactionIndex := int64(0); transactionIndex < transactionCount || (totalSize == 0 && transactionIndex == 0); transactionIndex += 1 {
+			for {
 				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 					dir, err := directory.CreateOrOpen(tr, objectPath, nil)
 					if err != nil {
@@ -549,7 +596,7 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 						}
 						tr.Add(countKey, one)
 						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
-						if totalSize > 0 {
+						if chunkCount > chunksPerTransaction {
 							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						}
 						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
@@ -559,8 +606,7 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 						}
 					}
 					if totalSize > 0 {
-						maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
-						for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
+						for {
 							n, err := f.Read(contentBuffer)
 							if err != nil && err != io.EOF {
 								panic(err)
@@ -569,12 +615,27 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 								fmt.Printf("Failed writing chunk %d./%d: written only %d/%d\n", chunk+1, chunkCount, n, chunkSize)
 								panic("Failed writing chunk.")
 							}
-							tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
+							switch compressionAlgorithm {
+							case 0: // none
+								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
+							case 1: // lz4
+								compressed := make([]byte, lz4.CompressBound(contentBuffer[:n]))
+								compressedByteCount, err := lz4.Compress(contentBuffer[:n], compressed)
+								if err != nil {
+									panic(err)
+								}
+								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
+								tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
+							}
 							totalWritten += int64(n)
+							chunk++
+							if chunk == chunkCount || chunk%chunksPerTransaction == 0 {
+								break
+							}
 						}
 					}
 					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
-					if transactionIndex+1 == transactionCount {
+					if chunk == chunkCount && chunkCount > chunksPerTransaction {
 						// Last transaction
 						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
@@ -583,7 +644,9 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 				if verbose {
 					fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
 				}
-				chunkIndexForNextTransaction += chunksPerTransaction
+				if chunk == chunkCount {
+					break
+				}
 			}
 			finishChannel <- true
 		}(id1)
@@ -604,7 +667,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180621\n", os.Args[0])
+		fmt.Printf("%s version 0.20180622\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
@@ -614,11 +677,12 @@ func main() {
 	allBuckets := false
 	var clusterFile string
 	var tags map[string]string
+	compressionAlgorithm := defaultCompressionAlgorithm
 	var argsIndex int
-	for i := 1; i < len(os.Args); i += 1 {
+	for i := 1; i < len(os.Args); i++ {
 		if !strings.HasPrefix(os.Args[i], "-") {
 			cmd = os.Args[i]
-			i += 1
+			i++
 			if i < len(os.Args) {
 				argsIndex = i
 			} else {
@@ -634,6 +698,15 @@ func main() {
 		}
 		if strings.HasPrefix(os.Args[i], "--cluster=") {
 			clusterFile = strings.SplitAfter(os.Args[i], "=")[1]
+		}
+		if strings.HasPrefix(os.Args[i], "--compression=") {
+			algo := strings.SplitAfter(os.Args[i], "=")[1]
+			for index, v := range compressionAlgorithms {
+				if v == algo {
+					compressionAlgorithm = index
+					break
+				}
+			}
 		}
 		if strings.HasPrefix(os.Args[i], "--metadata=") {
 			tag := strings.SplitAfter(os.Args[i], "=")[1]
@@ -666,7 +739,7 @@ func main() {
 				uniqueNames[val] = true
 			}
 			finishChannel := make(chan bool)
-			put(localName, db, bucketName, uniqueNames, tags, verbose, finishChannel)
+			put(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
 			}
@@ -681,7 +754,7 @@ func main() {
 				uniqueNames[val] = true
 			}
 			finishChannel := make(chan bool)
-			put_id(localName, db, bucketName, uniqueNames, tags, verbose, finishChannel)
+			putID(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
 			}
@@ -693,7 +766,7 @@ func main() {
 		} else {
 			finishChannel := make(chan bool)
 			get(localName, db, bucketName, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index += 1 {
+			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
 		}
@@ -703,8 +776,8 @@ func main() {
 			usage()
 		} else {
 			finishChannel := make(chan bool)
-			get_id(localName, db, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index += 1 {
+			getID(localName, db, os.Args[argsIndex:], finishChannel)
+			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
 		}
@@ -715,7 +788,7 @@ func main() {
 		} else {
 			finishChannel := make(chan bool)
 			delete(db, bucketName, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index += 1 {
+			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
 		}
@@ -725,8 +798,8 @@ func main() {
 			usage()
 		} else {
 			finishChannel := make(chan bool)
-			delete_id(db, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index += 1 {
+			deleteID(db, os.Args[argsIndex:], finishChannel)
+			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
 		}
