@@ -402,7 +402,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			}
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
-			totalWritten := 0
+			var totalWritten int64 = 0
 			var id []byte
 			contentBuffer := make([]byte, chunkSize)
 			transactionCount := transactionCountFromChunkCount(chunkCount)
@@ -462,7 +462,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 								panic("Failed writing chunk.")
 							}
 							tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
-							totalWritten += n
+							totalWritten += int64(n)
 						}
 					}
 					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
@@ -472,10 +472,10 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 					}
 					return nil, nil
 				})
+				if verbose {
+					fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
+				}
 				chunkIndexForNextTransaction += chunksPerTransaction
-			}
-			if verbose {
-				fmt.Printf("Uploaded %s.\n", filename)
 			}
 			finishChannel <- true
 		}(name1)
@@ -503,7 +503,7 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 			}
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
-			totalWritten := 0
+			var totalWritten int64 = 0
 
 			contentBuffer := make([]byte, chunkSize)
 			transactionCount := transactionCountFromChunkCount(chunkCount)
@@ -559,7 +559,7 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 								panic("Failed writing chunk.")
 							}
 							tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
-							totalWritten += n
+							totalWritten += int64(n)
 						}
 					}
 					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
@@ -569,10 +569,10 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 					}
 					return nil, nil
 				})
+				if verbose {
+					fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
+				}
 				chunkIndexForNextTransaction += chunksPerTransaction
-			}
-			if verbose {
-				fmt.Printf("Uploaded %s.\n", filename)
 			}
 			finishChannel <- true
 		}(id1)
