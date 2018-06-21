@@ -13,7 +13,10 @@ import (
 	"time"
 )
 
-const chunkSize = 100000
+const (
+	chunkSize                  = 100000
+	chunksPerTransaction int64 = 99
+)
 
 var (
 	one          = []byte{1, 0, 0, 0, 0, 0, 0, 0}
@@ -24,7 +27,7 @@ var (
 func lengthToChunkCount(length int64) int64 {
 	count := length / chunkSize
 	if (length % chunkSize) != 0 {
-		count = count + 1
+		count += 1
 	}
 	return count
 }
@@ -294,7 +297,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 						panic(err)
 					}
 				}
-				chunk = chunk + 1
+				chunk += 1
 				if chunk >= chunkCount {
 					break
 				}
@@ -354,7 +357,7 @@ func get_id(localName string, db fdb.Database, ids []string, finishChannel chan 
 						panic(err)
 					}
 				}
-				chunk = chunk + 1
+				chunk += 1
 				if chunk >= chunkCount {
 					break
 				}
@@ -362,6 +365,21 @@ func get_id(localName string, db fdb.Database, ids []string, finishChannel chan 
 			finishChannel <- true
 		}(id1)
 	}
+}
+
+func min(a int64, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func transactionCountFromChunkCount(chunkCount int64) int64 {
+	count := chunkCount / chunksPerTransaction
+	if chunkCount%chunksPerTransaction != 0 {
+		count += 1
+	}
+	return count
 }
 
 func put(localName string, db fdb.Database, bucketName string, uniqueNames map[string]bool, tags map[string]string, verbose bool, finishChannel chan bool) {
@@ -387,65 +405,74 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			totalWritten := 0
 			var id []byte
 			contentBuffer := make([]byte, chunkSize)
+			transactionCount := transactionCountFromChunkCount(chunkCount)
+			var chunk int64 = 0
+			chunkIndexForNextTransaction := chunksPerTransaction
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
-			for chunk := int64(0); chunk < chunkCount; chunk = chunk + 1 {
+			for transactionIndex := int64(0); transactionIndex < transactionCount || (totalSize == 0 && transactionIndex == 0); transactionIndex += 1 {
 				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 					dir, err := directory.CreateOrOpen(tr, objectPath, nil)
 					if err != nil {
 						panic(err)
 					}
-					if chunk == 0 {
-						var nameKey fdb.KeyConvertible
-						for {
-							id = []byte(bson.NewObjectId())
-							nameKey = dir.Pack(tuple.Tuple{id, "name"})
-							if tr.Get(nameKey).MustGet() == nil {
-								break
+					maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
+					for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
+						if chunk == 0 {
+							var nameKey fdb.KeyConvertible
+							for {
+								id = []byte(bson.NewObjectId())
+								nameKey = dir.Pack(tuple.Tuple{id, "name"})
+								if tr.Get(nameKey).MustGet() == nil {
+									break
+								}
+							}
+							tr.Set(nameKey, []byte(filename))
+							tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
+
+							indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
+							countTuple := tuple.Tuple{bucketName, filename, "count"}
+							countKey := indexDir.Pack(countTuple)
+							oldCountValue := tr.Get(countKey).MustGet()
+							var oldCount int64
+							if oldCountValue == nil {
+								oldCount = 0
+							} else {
+								oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
+							}
+							tr.Add(countKey, one)
+							tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
+							if transactionCount > 1 {
+								tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
+							}
+							tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+							tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
+							for key, value := range tags {
+								tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
 							}
 						}
-						tr.Set(nameKey, []byte(filename))
-						tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
-
-						indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
-						countTuple := tuple.Tuple{bucketName, filename, "count"}
-						countKey := indexDir.Pack(countTuple)
-						oldCountValue := tr.Get(countKey).MustGet()
-						var oldCount int64
-						if oldCountValue == nil {
-							oldCount = 0
-						} else {
-							oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
-						}
-						tr.Add(countKey, one)
-						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
-						tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
-						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
-						tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
-						for key, value := range tags {
-							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
+						if totalSize > 0 {
+							n, err := f.Read(contentBuffer)
+							if err != nil && err != io.EOF {
+								panic(err)
+							}
+							if chunk+1 < chunkCount && n != chunkSize {
+								fmt.Printf("Failed writing chunk %d./%d: written only %d/%d bytes.\n", chunk+1, chunkCount, n, chunkSize)
+								panic("Failed writing chunk.")
+							}
+							tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
+							totalWritten += n
 						}
 					}
-					n, err := f.Read(contentBuffer)
-					if err != nil && err != io.EOF {
-						panic(err)
-					}
-					if chunk+1 < chunkCount && n != chunkSize {
-						fmt.Printf("Failed writing chunk %d./%d: written only %d/%d bytes.\n", chunk+1, chunkCount, n, chunkSize)
-						panic("Failed writing chunk.")
-					}
-					tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
-
-					totalWritten += n
 					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
-
-					if chunk+1 == chunkCount { // Last chunk.
+					if transactionIndex+1 == transactionCount {
+						// Last transaction
 						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
-
 					return nil, nil
 				})
+				chunkIndexForNextTransaction += chunksPerTransaction
 			}
 			if verbose {
 				fmt.Printf("Uploaded %s.\n", filename)
@@ -479,61 +506,70 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 			totalWritten := 0
 
 			contentBuffer := make([]byte, chunkSize)
+			transactionCount := transactionCountFromChunkCount(chunkCount)
+			var chunk int64 = 0
+			chunkIndexForNextTransaction := chunksPerTransaction
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
-			for chunk := int64(0); chunk < chunkCount; chunk = chunk + 1 {
+			for transactionIndex := int64(0); transactionIndex < transactionCount || (totalSize == 0 && transactionIndex == 0); transactionIndex += 1 {
 				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 					dir, err := directory.CreateOrOpen(tr, objectPath, nil)
 					if err != nil {
 						panic(err)
 					}
-					if chunk == 0 {
-						nameKey := dir.Pack(tuple.Tuple{id, "name"})
-						if tr.Get(nameKey).MustGet() != nil {
-							panic("Object with given id already exists!")
-						}
-						tr.Set(nameKey, []byte(filename))
-						tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
+					maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
+					for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
+						if chunk == 0 {
+							nameKey := dir.Pack(tuple.Tuple{id, "name"})
+							if tr.Get(nameKey).MustGet() != nil {
+								panic("Object with given id already exists!")
+							}
+							tr.Set(nameKey, []byte(filename))
+							tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
 
-						indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
-						countTuple := tuple.Tuple{bucketName, filename, "count"}
-						countKey := indexDir.Pack(countTuple)
-						oldCountValue := tr.Get(countKey).MustGet()
-						var oldCount int64
-						if oldCountValue == nil {
-							oldCount = 0
-						} else {
-							oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
+							indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
+							countTuple := tuple.Tuple{bucketName, filename, "count"}
+							countKey := indexDir.Pack(countTuple)
+							oldCountValue := tr.Get(countKey).MustGet()
+							var oldCount int64
+							if oldCountValue == nil {
+								oldCount = 0
+							} else {
+								oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
+							}
+							tr.Add(countKey, one)
+							tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
+							if totalSize > 0 {
+								tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
+							}
+							tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+							tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
+							for key, value := range tags {
+								tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
+							}
 						}
-						tr.Add(countKey, one)
-						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
-						tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
-						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
-						tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
-						for key, value := range tags {
-							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
+						if totalSize > 0 {
+							n, err := f.Read(contentBuffer)
+							if err != nil && err != io.EOF {
+								panic(err)
+							}
+							if chunk+1 < chunkCount && n != chunkSize {
+								fmt.Printf("Failed writing chunk %d./%d: written only %d/%d\n", chunk+1, chunkCount, n, chunkSize)
+								panic("Failed writing chunk.")
+							}
+							tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
+							totalWritten += n
 						}
 					}
-					n, err := f.Read(contentBuffer)
-					if err != nil && err != io.EOF {
-						panic(err)
-					}
-					if chunk+1 < chunkCount && n != chunkSize {
-						fmt.Printf("Failed writing chunk %d./%d: written only %d/%d\n", chunk+1, chunkCount, n, chunkSize)
-						panic("Failed writing chunk.")
-					}
-					tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
-
-					totalWritten += n
 					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
-
-					if chunk+1 == chunkCount { // Last chunk.
+					if transactionIndex+1 == transactionCount {
+						// Last transaction
 						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
-
 					return nil, nil
 				})
+				chunkIndexForNextTransaction += chunksPerTransaction
 			}
 			if verbose {
 				fmt.Printf("Uploaded %s.\n", filename)
@@ -568,10 +604,10 @@ func main() {
 	var clusterFile string
 	var tags map[string]string
 	var argsIndex int
-	for i := 1; i < len(os.Args); i = i + 1 {
+	for i := 1; i < len(os.Args); i += 1 {
 		if !strings.HasPrefix(os.Args[i], "-") {
 			cmd = os.Args[i]
-			i = i + 1
+			i += 1
 			if i < len(os.Args) {
 				argsIndex = i
 			} else {
@@ -646,7 +682,7 @@ func main() {
 		} else {
 			finishChannel := make(chan bool)
 			get(localName, db, bucketName, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index = index + 1 {
+			for index := argsIndex; index < len(os.Args); index += 1 {
 				<-finishChannel
 			}
 		}
@@ -657,7 +693,7 @@ func main() {
 		} else {
 			finishChannel := make(chan bool)
 			get_id(localName, db, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index = index + 1 {
+			for index := argsIndex; index < len(os.Args); index += 1 {
 				<-finishChannel
 			}
 		}
@@ -668,7 +704,7 @@ func main() {
 		} else {
 			finishChannel := make(chan bool)
 			delete(db, bucketName, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index = index + 1 {
+			for index := argsIndex; index < len(os.Args); index += 1 {
 				<-finishChannel
 			}
 		}
@@ -679,7 +715,7 @@ func main() {
 		} else {
 			finishChannel := make(chan bool)
 			delete_id(db, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index = index + 1 {
+			for index := argsIndex; index < len(os.Args); index += 1 {
 				<-finishChannel
 			}
 		}
