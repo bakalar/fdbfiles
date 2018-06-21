@@ -2,7 +2,7 @@
 Manipulate FoundationDB Object Store using the command line.
 
 # Main features
-- Implemented by adding Object Storage and compression layers on top of FoundationDB core data model
+- Implemented object storage and compression layer on top of FoundationDB core data model
 - Supports multiple versions of the same file: you upload the same file multiple times and both versions are available in the Object Store
 - Transparent compression support (LZ4 algorithm): uploaded files can be transparently compressed during upload
 - Implements data model suitable for advanced operations like partial modifications or partial download
