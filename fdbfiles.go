@@ -448,6 +448,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
 			var totalWritten int64
+			var totalWrittenCompressed int64
 			var id []byte
 			contentBuffer := make([]byte, chunkSize)
 			var chunk int64
@@ -519,6 +520,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 								}
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
+								totalWrittenCompressed += int64(len(compressed[:compressedByteCount]))
 							}
 							totalWritten += int64(n)
 							chunk++
@@ -535,7 +537,11 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 					return nil, nil
 				})
 				if verbose {
-					fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
+					if totalWritten < totalSize {
+						fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
+					} else {
+						fmt.Printf("Uploaded 100%% of %s (compression ratio = %f).\n", filename, float64(totalWrittenCompressed)/float64(totalWritten))
+					}
 				}
 				if chunk == chunkCount {
 					break
@@ -569,7 +575,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
 			var totalWritten int64
-
+			var totalWrittenCompressed int64
 			contentBuffer := make([]byte, chunkSize)
 			var chunk int64
 			if verbose {
@@ -636,6 +642,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 								}
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
+								totalWrittenCompressed += int64(len(compressed[:compressedByteCount]))
 							}
 							totalWritten += int64(n)
 							chunk++
@@ -652,7 +659,11 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 					return nil, nil
 				})
 				if verbose {
-					fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
+					if totalWritten < totalSize {
+						fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
+					} else {
+						fmt.Printf("Uploaded 100%% of %s (compression ratio = %f).\n", filename, float64(totalWrittenCompressed)/float64(totalWritten))
+					}
 				}
 				if chunk == chunkCount {
 					break
