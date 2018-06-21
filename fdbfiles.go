@@ -25,7 +25,7 @@ var (
 	one                   = []byte{1, 0, 0, 0, 0, 0, 0, 0}
 	objectPath            = []string{"object"}
 	indexDirPath          = []string{"object", "index", "name"}
-	compressionAlgorithms = []string{"none", "lz4"}
+	compressionAlgorithms = []string{"none", "lz4", "lz4hc"}
 )
 
 func lengthToChunkCount(length int64) int64 {
@@ -54,7 +54,7 @@ func usage() {
 	fmt.Println("\t--version\tprint the tool version and exit")
 	fmt.Println("\nstorage options:")
 	fmt.Println("\t--all_buckets\t\tshow all FoundationDB Object Store buckets when using list command")
-	fmt.Println("\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
+	fmt.Println("\t--compression=ALGO\tchoose compression algorithm: 'none', 'lz4' (default) or 'lz4hc'")
 	fmt.Println("\t--bucket=BUCKET\t\tFoundationDB Object Store bucket to use (default: 'objectstorage1')")
 	fmt.Println("\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
 	fmt.Println("\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
@@ -299,7 +299,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 						v, err := tuple.Unpack(compressionAlgoFuture.MustGet())
 						if err == nil {
 							switch v[0].(int64) {
-							case 1: // lz4
+							case 1, 2: // lz4, lz4hc
 								var uncompressedSize int64
 								if chunk+1 == chunkCount {
 									uncompressedSize = length % chunkSize
@@ -383,7 +383,7 @@ func getID(localName string, db fdb.Database, ids []string, finishChannel chan b
 						v, err := tuple.Unpack(compressionAlgoFuture.MustGet())
 						if err == nil {
 							switch v[0].(int64) {
-							case 1: // lz4
+							case 1, 2: // lz4, lz4hc
 								var uncompressedSize int64
 								if chunk+1 == chunkCount {
 									uncompressedSize = length % chunkSize
@@ -506,9 +506,14 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 							switch compressionAlgorithm {
 							case 0: // none
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
-							case 1: // lz4
+							case 1, 2: // lz4, lz4hc
 								compressed := make([]byte, lz4.CompressBound(contentBuffer[:n]))
-								compressedByteCount, err := lz4.Compress(contentBuffer[:n], compressed)
+								var compressedByteCount int
+								if compressionAlgorithm == 1 {
+									compressedByteCount, err = lz4.Compress(contentBuffer[:n], compressed)
+								} else {
+									compressedByteCount, err = lz4.CompressHC(contentBuffer[:n], compressed)
+								}
 								if err != nil {
 									panic(err)
 								}
@@ -618,9 +623,14 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 							switch compressionAlgorithm {
 							case 0: // none
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
-							case 1: // lz4
+							case 1, 2: // lz4, lz4hc
 								compressed := make([]byte, lz4.CompressBound(contentBuffer[:n]))
-								compressedByteCount, err := lz4.Compress(contentBuffer[:n], compressed)
+								var compressedByteCount int
+								if compressionAlgorithm == 1 {
+									compressedByteCount, err = lz4.Compress(contentBuffer[:n], compressed)
+								} else {
+									compressedByteCount, err = lz4.CompressHC(contentBuffer[:n], compressed)
+								}
 								if err != nil {
 									panic(err)
 								}
@@ -701,11 +711,16 @@ func main() {
 		}
 		if strings.HasPrefix(os.Args[i], "--compression=") {
 			algo := strings.SplitAfter(os.Args[i], "=")[1]
-			for index, v := range compressionAlgorithms {
-				if v == algo {
+			index := 0
+			for ; index < len(compressionAlgorithms); index++ {
+				if compressionAlgorithms[index] == algo {
 					compressionAlgorithm = index
 					break
 				}
+			}
+			if index == len(compressionAlgorithms) {
+				usage()
+				return
 			}
 		}
 		if strings.HasPrefix(os.Args[i], "--metadata=") {
@@ -730,10 +745,10 @@ func main() {
 		}
 		list(db, allBuckets, bucketName, prefix)
 	case "put":
-		db = database(clusterFile)
 		if argsIndex < 0 {
 			usage()
 		} else {
+			db = database(clusterFile)
 			uniqueNames := make(map[string]bool)
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
@@ -745,10 +760,10 @@ func main() {
 			}
 		}
 	case "put_id":
-		db = database(clusterFile)
 		if argsIndex < 0 {
 			usage()
 		} else {
+			db = database(clusterFile)
 			uniqueNames := make(map[string]bool)
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
@@ -760,10 +775,10 @@ func main() {
 			}
 		}
 	case "get":
-		db = database(clusterFile)
 		if argsIndex < 0 {
 			usage()
 		} else {
+			db = database(clusterFile)
 			finishChannel := make(chan bool)
 			get(localName, db, bucketName, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
@@ -771,10 +786,10 @@ func main() {
 			}
 		}
 	case "get_id":
-		db = database(clusterFile)
 		if argsIndex < 0 {
 			usage()
 		} else {
+			db = database(clusterFile)
 			finishChannel := make(chan bool)
 			getID(localName, db, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
@@ -782,10 +797,10 @@ func main() {
 			}
 		}
 	case "delete":
-		db = database(clusterFile)
 		if argsIndex < 0 {
 			usage()
 		} else {
+			db = database(clusterFile)
 			finishChannel := make(chan bool)
 			delete(db, bucketName, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
@@ -793,10 +808,10 @@ func main() {
 			}
 		}
 	case "delete_id":
-		db = database(clusterFile)
 		if argsIndex < 0 {
 			usage()
 		} else {
+			db = database(clusterFile)
 			finishChannel := make(chan bool)
 			deleteID(db, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
