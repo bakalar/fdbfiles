@@ -57,7 +57,7 @@ func usage() {
 }
 
 func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
-	db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+	db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 		indexDir, err := directory.Open(tr, indexDirPath, nil)
 		if err != nil {
 			panic(err)
@@ -241,7 +241,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 			print := localName == "-"
 			for chunk := int64(0); ; {
 				var bytes []byte
-				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+				db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 					dir, err := directory.Open(tr, objectPath, nil)
 					if err != nil {
 						panic(err)
@@ -317,7 +317,7 @@ func get_id(localName string, db fdb.Database, ids []string, finishChannel chan 
 			print := localName == "-"
 			for chunk := int64(0); ; {
 				var bytes []byte
-				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+				db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 					dir, err := directory.Open(tr, objectPath, nil)
 					if err != nil {
 						panic(err)
@@ -417,41 +417,41 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 					if err != nil {
 						panic(err)
 					}
-					maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
-					for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
-						if chunk == 0 {
-							var nameKey fdb.KeyConvertible
-							for {
-								id = []byte(bson.NewObjectId())
-								nameKey = dir.Pack(tuple.Tuple{id, "name"})
-								if tr.Get(nameKey).MustGet() == nil {
-									break
-								}
-							}
-							tr.Set(nameKey, []byte(filename))
-							tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
-
-							indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
-							countTuple := tuple.Tuple{bucketName, filename, "count"}
-							countKey := indexDir.Pack(countTuple)
-							oldCountValue := tr.Get(countKey).MustGet()
-							var oldCount int64
-							if oldCountValue == nil {
-								oldCount = 0
-							} else {
-								oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
-							}
-							tr.Add(countKey, one)
-							tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
-							if transactionCount > 1 {
-								tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
-							}
-							tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
-							tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
-							for key, value := range tags {
-								tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
+					if chunk == 0 {
+						var nameKey fdb.KeyConvertible
+						for {
+							id = []byte(bson.NewObjectId())
+							nameKey = dir.Pack(tuple.Tuple{id, "name"})
+							if tr.Get(nameKey).MustGet() == nil {
+								break
 							}
 						}
+						tr.Set(nameKey, []byte(filename))
+						tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
+
+						indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
+						countTuple := tuple.Tuple{bucketName, filename, "count"}
+						countKey := indexDir.Pack(countTuple)
+						oldCountValue := tr.Get(countKey).MustGet()
+						var oldCount int64
+						if oldCountValue == nil {
+							oldCount = 0
+						} else {
+							oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
+						}
+						tr.Add(countKey, one)
+						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
+						if transactionCount > 1 {
+							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
+						}
+						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+						tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
+						for key, value := range tags {
+							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
+						}
+					}
+					maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
+					for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
 						if totalSize > 0 {
 							n, err := f.Read(contentBuffer)
 							if err != nil && err != io.EOF {
@@ -518,37 +518,37 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 					if err != nil {
 						panic(err)
 					}
+					if chunk == 0 {
+						nameKey := dir.Pack(tuple.Tuple{id, "name"})
+						if tr.Get(nameKey).MustGet() != nil {
+							panic("Object with given id already exists!")
+						}
+						tr.Set(nameKey, []byte(filename))
+						tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
+
+						indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
+						countTuple := tuple.Tuple{bucketName, filename, "count"}
+						countKey := indexDir.Pack(countTuple)
+						oldCountValue := tr.Get(countKey).MustGet()
+						var oldCount int64
+						if oldCountValue == nil {
+							oldCount = 0
+						} else {
+							oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
+						}
+						tr.Add(countKey, one)
+						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
+						if totalSize > 0 {
+							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
+						}
+						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+						tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
+						for key, value := range tags {
+							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
+						}
+					}
 					maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
 					for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
-						if chunk == 0 {
-							nameKey := dir.Pack(tuple.Tuple{id, "name"})
-							if tr.Get(nameKey).MustGet() != nil {
-								panic("Object with given id already exists!")
-							}
-							tr.Set(nameKey, []byte(filename))
-							tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
-
-							indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
-							countTuple := tuple.Tuple{bucketName, filename, "count"}
-							countKey := indexDir.Pack(countTuple)
-							oldCountValue := tr.Get(countKey).MustGet()
-							var oldCount int64
-							if oldCountValue == nil {
-								oldCount = 0
-							} else {
-								oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
-							}
-							tr.Add(countKey, one)
-							tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
-							if totalSize > 0 {
-								tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
-							}
-							tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
-							tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
-							for key, value := range tags {
-								tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
-							}
-						}
 						if totalSize > 0 {
 							n, err := f.Read(contentBuffer)
 							if err != nil && err != io.EOF {
