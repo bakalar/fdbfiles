@@ -593,7 +593,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180619\n", os.Args[0])
+		fmt.Printf("%s version 0.20180621\n", os.Args[0])
 		return
 	}
 	verbose := false
