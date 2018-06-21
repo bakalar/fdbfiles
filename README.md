@@ -7,5 +7,4 @@ Manipulate FoundationDB Object Store using the command line.
 
 # Current limitations
 - Supports files up to 8192PiB in size
-- Database operations are run in parallel only if operating on multiple objects
-- Cancelling an upload will not result in a total rollback of the upload, but in a partial upload that will be consistent in the database and marked as a partial upload - files are uploaded in chunks of 100kB using transactions
+- Cancelling an upload will not result in a total rollback of the upload, but in a partial upload that will be consistent in the database and marked as a partial upload - files are uploaded in chunks using transactions
