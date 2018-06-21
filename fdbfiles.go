@@ -239,8 +239,22 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 			var f *os.File
 			var id []byte
 			print := localName == "-"
-			for chunk := int64(0); ; {
-				var bytes []byte
+			var chunk int64 = 0
+			if !print {
+				var path string
+				if len(names) == 1 && len(localName) > 0 {
+					path = localName
+				} else {
+					path = name
+				}
+				var err error
+				f, err = os.Create(path)
+				if err != nil {
+					panic(err)
+				}
+				defer f.Close()
+			}
+			for {
 				db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 					dir, err := directory.Open(tr, objectPath, nil)
 					if err != nil {
@@ -271,34 +285,25 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 						length = v[0].(int64)
 						chunkCount = lengthToChunkCount(length)
 					}
-					key := dir.Pack(tuple.Tuple{id, chunk})
-					bytes = tr.Get(key).MustGet()
+					for chunk < chunkCount {
+						key := dir.Pack(tuple.Tuple{id, chunk})
+						bytes := tr.Get(key).MustGet()
+						if print {
+							fmt.Print(string(bytes))
+						} else {
+							_, err := f.Write(bytes)
+							if err != nil {
+								panic(err)
+							}
+						}
+						chunk += 1
+						if print || chunk%chunksPerTransaction == 0 {
+							break
+						}
+					}
 					return nil, nil
 				})
-				if chunk == 0 && !print {
-					var path string
-					if len(names) == 1 && len(localName) > 0 {
-						path = localName
-					} else {
-						path = name
-					}
-					var err error
-					f, err = os.Create(path)
-					if err != nil {
-						panic(err)
-					}
-					defer f.Close()
-				}
-				if print {
-					fmt.Print(string(bytes))
-				} else {
-					_, err := f.Write(bytes)
-					if err != nil {
-						panic(err)
-					}
-				}
-				chunk += 1
-				if chunk >= chunkCount {
+				if chunk == chunkCount {
 					break
 				}
 			}
@@ -315,13 +320,28 @@ func get_id(localName string, db fdb.Database, ids []string, finishChannel chan 
 			var chunkCount int64
 			var f *os.File
 			print := localName == "-"
-			for chunk := int64(0); ; {
-				var bytes []byte
+			var chunk int64 = 0
+			if !print {
+				var path string
+				if len(ids) == 1 && len(localName) > 0 {
+					path = localName
+				} else {
+					path = id
+				}
+				var err error
+				f, err = os.Create(path)
+				if err != nil {
+					panic(err)
+				}
+				defer f.Close()
+			}
+			for {
 				db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 					dir, err := directory.Open(tr, objectPath, nil)
 					if err != nil {
 						panic(err)
 					}
+
 					if chunk == 0 {
 						lengthKey := dir.Pack(tuple.Tuple{[]byte(_id), "len"})
 						v, err := tuple.Unpack(tr.Get(lengthKey).MustGet())
@@ -331,34 +351,25 @@ func get_id(localName string, db fdb.Database, ids []string, finishChannel chan 
 						length = v[0].(int64)
 						chunkCount = lengthToChunkCount(length)
 					}
-					key := dir.Pack(tuple.Tuple{[]byte(_id), chunk})
-					bytes = tr.Get(key).MustGet()
+					for chunk < chunkCount {
+						key := dir.Pack(tuple.Tuple{[]byte(_id), chunk})
+						bytes := tr.Get(key).MustGet()
+						if print {
+							fmt.Print(string(bytes))
+						} else {
+							_, err := f.Write(bytes)
+							if err != nil {
+								panic(err)
+							}
+						}
+						chunk += 1
+						if print || chunk%chunksPerTransaction == 0 {
+							break
+						}
+					}
 					return nil, nil
 				})
-				if chunk == 0 && !print {
-					var path string
-					if len(ids) == 1 && len(localName) > 0 {
-						path = localName
-					} else {
-						path = id
-					}
-					var err error
-					f, err = os.Create(path)
-					if err != nil {
-						panic(err)
-					}
-					defer f.Close()
-				}
-				if print {
-					fmt.Print(string(bytes))
-				} else {
-					_, err := f.Write(bytes)
-					if err != nil {
-						panic(err)
-					}
-				}
-				chunk += 1
-				if chunk >= chunkCount {
+				if chunk == chunkCount {
 					break
 				}
 			}
@@ -450,9 +461,9 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
 						}
 					}
-					maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
-					for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
-						if totalSize > 0 {
+					if totalSize > 0 {
+						maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
+						for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
 							n, err := f.Read(contentBuffer)
 							if err != nil && err != io.EOF {
 								panic(err)
@@ -547,9 +558,9 @@ func put_id(localName string, db fdb.Database, bucketName string, uniqueIds map[
 							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
 						}
 					}
-					maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
-					for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
-						if totalSize > 0 {
+					if totalSize > 0 {
+						maxChunkIndex := min(chunkCount, chunkIndexForNextTransaction)
+						for ; chunk < maxChunkIndex || (totalSize == 0 && chunk == 0); chunk += 1 {
 							n, err := f.Read(contentBuffer)
 							if err != nil && err != io.EOF {
 								panic(err)
