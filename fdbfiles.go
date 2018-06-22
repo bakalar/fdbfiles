@@ -540,7 +540,10 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 					if totalWritten < totalSize {
 						fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
 					} else {
-						fmt.Printf("Uploaded 100%% of %s (compression ratio = %f).\n", filename, float64(totalWrittenCompressed)/float64(totalWritten))
+						if totalWrittenCompressed == 0 {
+							totalWrittenCompressed = totalWritten
+						}
+						fmt.Printf("Uploaded 100%% of %s (compression ratio = %.2f).\n", filename, float64(totalWritten)/float64(totalWrittenCompressed))
 					}
 				}
 				if chunk == chunkCount {
@@ -662,7 +665,10 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 					if totalWritten < totalSize {
 						fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
 					} else {
-						fmt.Printf("Uploaded 100%% of %s (compression ratio = %f).\n", filename, float64(totalWrittenCompressed)/float64(totalWritten))
+						if totalWrittenCompressed == 0 {
+							totalWrittenCompressed = totalWritten
+						}
+						fmt.Printf("Uploaded 100%% of %s (compression ratio = %.2f).\n", filename, float64(totalWritten)/float64(totalWrittenCompressed))
 					}
 				}
 				if chunk == chunkCount {
