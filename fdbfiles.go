@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	chunkSize                         = 100000
+	chunkSize                         = 1e5
 	chunksPerTransaction        int64 = 99
 	defaultCompressionAlgorithm       = 1
 )
@@ -125,7 +125,7 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 					uploadDate = _id.Time()
 				} else {
 					ns := v[0].(int64)
-					uploadDate = time.Unix(ns/1000000000, ns%1000000000)
+					uploadDate = time.Unix(ns/1e9, ns%1e9)
 				}
 				fmt.Printf("%s %s\t%s %d\t%s%s\n", _id, t[1], uploadDate.Format("2006-01-02T15:04:05.000000000-0700"), length, t[2], partialMark)
 			}
@@ -236,7 +236,7 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 	}
 }
 
-func get(localName string, db fdb.Database, bucketName string, names []string, finishChannel chan bool) {
+func get(localName string, db fdb.Database, bucketName string, names []string, verbose bool, finishChannel chan bool) {
 	for _, name1 := range names {
 		go func(name string) {
 			var length int64
@@ -259,6 +259,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 				}
 				defer f.Close()
 			}
+			timeStarted := time.Now()
 			for {
 				db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 					dir, err := directory.Open(tr, objectPath, nil)
@@ -330,12 +331,16 @@ func get(localName string, db fdb.Database, bucketName string, names []string, f
 					break
 				}
 			}
+			if verbose {
+				elapsed := time.Since(timeStarted)
+				fmt.Printf("Downloaded %s (%.2fMB/s).\n", name, float64(length)/1e6/elapsed.Seconds())
+			}
 			finishChannel <- true
 		}(name1)
 	}
 }
 
-func getID(localName string, db fdb.Database, ids []string, finishChannel chan bool) {
+func getID(localName string, db fdb.Database, ids []string, verbose bool, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
 			_id := bson.ObjectIdHex(id)
@@ -358,6 +363,7 @@ func getID(localName string, db fdb.Database, ids []string, finishChannel chan b
 				}
 				defer f.Close()
 			}
+			timeStarted := time.Now()
 			for {
 				db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
 					dir, err := directory.Open(tr, objectPath, nil)
@@ -414,16 +420,13 @@ func getID(localName string, db fdb.Database, ids []string, finishChannel chan b
 					break
 				}
 			}
+			if verbose {
+				elapsed := time.Since(timeStarted)
+				fmt.Printf("Downloaded %s (%.2fMB/s).\n", id, float64(length)/1e6/elapsed.Seconds())
+			}
 			finishChannel <- true
 		}(id1)
 	}
-}
-
-func min(a int64, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func put(localName string, db fdb.Database, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
@@ -455,6 +458,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
+			timeStarted := time.Now()
 			for {
 				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 					dir, err := directory.CreateOrOpen(tr, objectPath, nil)
@@ -540,10 +544,12 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 					if totalWritten < totalSize {
 						fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
 					} else {
+						elapsed := time.Since(timeStarted)
 						if totalWrittenCompressed == 0 {
 							totalWrittenCompressed = totalWritten
 						}
-						fmt.Printf("Uploaded 100%% of %s (compression ratio = %.2f).\n", filename, float64(totalWritten)/float64(totalWrittenCompressed))
+						fTotalWritten := float64(totalWritten)
+						fmt.Printf("Uploaded 100%% of %s (%.2fMB/s; compression ratio = %.2f).\n", filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/float64(totalWrittenCompressed))
 					}
 				}
 				if chunk == chunkCount {
@@ -584,6 +590,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
+			timeStarted := time.Now()
 			for {
 				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 					dir, err := directory.CreateOrOpen(tr, objectPath, nil)
@@ -665,10 +672,12 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 					if totalWritten < totalSize {
 						fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
 					} else {
+						elapsed := time.Since(timeStarted)
 						if totalWrittenCompressed == 0 {
 							totalWrittenCompressed = totalWritten
 						}
-						fmt.Printf("Uploaded 100%% of %s (compression ratio = %.2f).\n", filename, float64(totalWritten)/float64(totalWrittenCompressed))
+						fTotalWritten := float64(totalWritten)
+						fmt.Printf("Uploaded 100%% of %s (%.2fMB/s; compression ratio = %.2f).\n", filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/float64(totalWrittenCompressed))
 					}
 				}
 				if chunk == chunkCount {
@@ -797,7 +806,7 @@ func main() {
 		} else {
 			db = database(clusterFile)
 			finishChannel := make(chan bool)
-			get(localName, db, bucketName, os.Args[argsIndex:], finishChannel)
+			get(localName, db, bucketName, os.Args[argsIndex:], verbose, finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
@@ -808,7 +817,7 @@ func main() {
 		} else {
 			db = database(clusterFile)
 			finishChannel := make(chan bool)
-			getID(localName, db, os.Args[argsIndex:], finishChannel)
+			getID(localName, db, os.Args[argsIndex:], verbose, finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
