@@ -455,6 +455,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			var id []byte
 			contentBuffer := make([]byte, chunkSize)
 			var chunk int64
+			var lastPercent int
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
@@ -541,15 +542,18 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 					return nil, nil
 				})
 				if verbose {
-					if totalWritten < totalSize {
-						fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
-					} else {
-						elapsed := time.Since(timeStarted)
-						if totalWrittenCompressed == 0 {
-							totalWrittenCompressed = totalWritten
-						}
+					elapsed := time.Since(timeStarted)
+					currentPercent := int(100 * totalWritten / totalSize)
+					if lastPercent < currentPercent {
 						fTotalWritten := float64(totalWritten)
-						fmt.Printf("Uploaded 100%% of %s (%.2fMB/s; compression ratio = %.2f).\n", filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/float64(totalWrittenCompressed))
+						var compressed float64
+						if totalWrittenCompressed == 0 {
+							compressed = fTotalWritten
+						} else {
+							compressed = float64(totalWrittenCompressed)
+						}
+						fmt.Printf("Uploaded %d%% of %s (%.2fMB/s; compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/compressed)
+						lastPercent = currentPercent
 					}
 				}
 				if chunk == chunkCount {
@@ -587,6 +591,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 			var totalWrittenCompressed int64
 			contentBuffer := make([]byte, chunkSize)
 			var chunk int64
+			var lastPercent int
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
@@ -669,15 +674,18 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 					return nil, nil
 				})
 				if verbose {
-					if totalWritten < totalSize {
-						fmt.Printf("Uploaded %d%% of %s.\n", 100*totalWritten/totalSize, filename)
-					} else {
-						elapsed := time.Since(timeStarted)
-						if totalWrittenCompressed == 0 {
-							totalWrittenCompressed = totalWritten
-						}
+					elapsed := time.Since(timeStarted)
+					currentPercent := int(100 * totalWritten / totalSize)
+					if lastPercent < currentPercent {
 						fTotalWritten := float64(totalWritten)
-						fmt.Printf("Uploaded 100%% of %s (%.2fMB/s; compression ratio = %.2f).\n", filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/float64(totalWrittenCompressed))
+						var compressed float64
+						if totalWrittenCompressed == 0 {
+							compressed = fTotalWritten
+						} else {
+							compressed = float64(totalWrittenCompressed)
+						}
+						fmt.Printf("Uploaded %d%% of %s (%.2fMB/s; compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/compressed)
+						lastPercent = currentPercent
 					}
 				}
 				if chunk == chunkCount {
