@@ -297,8 +297,8 @@ func get(localName string, db fdb.Database, bucketName string, names []string, v
 						compressionKey := dir.Pack(tuple.Tuple{[]byte(id), chunk, "c"})
 						compressionAlgoFuture := tr.Get(compressionKey)
 						bytes := bytesFuture.MustGet()
-						v, err := tuple.Unpack(compressionAlgoFuture.MustGet())
-						if err == nil {
+						v, _ := tuple.Unpack(compressionAlgoFuture.MustGet())
+						if v != nil {
 							switch v[0].(int64) {
 							case 1, 2: // lz4, lz4hc
 								var uncompressedSize int64
@@ -386,8 +386,8 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 						compressionKey := dir.Pack(tuple.Tuple{[]byte(_id), chunk, "c"})
 						compressionAlgoFuture := tr.Get(compressionKey)
 						bytes := bytesFuture.MustGet()
-						v, err := tuple.Unpack(compressionAlgoFuture.MustGet())
-						if err == nil {
+						v, _ := tuple.Unpack(compressionAlgoFuture.MustGet())
+						if v != nil {
 							switch v[0].(int64) {
 							case 1, 2: // lz4, lz4hc
 								var uncompressedSize int64
