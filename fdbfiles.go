@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	chunkSize                         = 1e5
-	chunksPerTransaction        int64 = 99
-	defaultCompressionAlgorithm       = 1
+	chunkSize                   = 1e5
+	chunksPerTransaction        = 99
+	defaultCompressionAlgorithm = 1
 )
 
 var (
@@ -120,12 +120,18 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 				}
 
 				var uploadDate time.Time
-				v, err = tuple.Unpack(uploadDateFuture.MustGet())
-				if err != nil || v == nil {
+				uploadDateValue := uploadDateFuture.MustGet()
+				if uploadDateValue != nil {
+					v, err = tuple.Unpack(uploadDateValue)
+					if v == nil || err != nil {
+						uploadDateValue = nil
+					} else {
+						ns := v[0].(int64)
+						uploadDate = time.Unix(ns/1e9, ns%1e9)
+					}
+				}
+				if uploadDateValue == nil {
 					uploadDate = _id.Time()
-				} else {
-					ns := v[0].(int64)
-					uploadDate = time.Unix(ns/1e9, ns%1e9)
 				}
 				fmt.Printf("%s %s\t%s %d\t%s%s\n", _id, t[1], uploadDate.Format("2006-01-02T15:04:05.000000000-0700"), length, t[2], partialMark)
 			}
@@ -297,21 +303,26 @@ func get(localName string, db fdb.Database, bucketName string, names []string, v
 						compressionKey := dir.Pack(tuple.Tuple{[]byte(id), chunk, "c"})
 						compressionAlgoFuture := tr.Get(compressionKey)
 						bytes := bytesFuture.MustGet()
-						v, _ := tuple.Unpack(compressionAlgoFuture.MustGet())
-						if v != nil {
-							switch v[0].(int64) {
-							case 1, 2: // lz4, lz4hc
-								var uncompressedSize int64
-								if chunk+1 == chunkCount {
-									uncompressedSize = length % chunkSize
-								} else {
-									uncompressedSize = chunkSize
+
+						compressionAlgo := compressionAlgoFuture.MustGet()
+						if compressionAlgo != nil {
+							v, _ := tuple.Unpack(compressionAlgo)
+							if v != nil {
+								switch v[0].(int64) {
+								case 1, 2: // lz4, lz4hc
+									var uncompressedSize int64
+									if chunk+1 == chunkCount {
+										uncompressedSize = length % chunkSize
+									} else {
+										uncompressedSize = chunkSize
+									}
+									uncompressed := make([]byte, uncompressedSize)
+									lz4.Uncompress(bytes, uncompressed)
+									bytes = uncompressed
 								}
-								uncompressed := make([]byte, uncompressedSize)
-								lz4.Uncompress(bytes, uncompressed)
-								bytes = uncompressed
 							}
 						}
+
 						if print {
 							fmt.Print(string(bytes))
 						} else {
@@ -386,21 +397,26 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 						compressionKey := dir.Pack(tuple.Tuple{[]byte(_id), chunk, "c"})
 						compressionAlgoFuture := tr.Get(compressionKey)
 						bytes := bytesFuture.MustGet()
-						v, _ := tuple.Unpack(compressionAlgoFuture.MustGet())
-						if v != nil {
-							switch v[0].(int64) {
-							case 1, 2: // lz4, lz4hc
-								var uncompressedSize int64
-								if chunk+1 == chunkCount {
-									uncompressedSize = length % chunkSize
-								} else {
-									uncompressedSize = chunkSize
+
+						compressionAlgo := compressionAlgoFuture.MustGet()
+						if compressionAlgo != nil {
+							v, _ := tuple.Unpack(compressionAlgo)
+							if v != nil {
+								switch v[0].(int64) {
+								case 1, 2: // lz4, lz4hc
+									var uncompressedSize int64
+									if chunk+1 == chunkCount {
+										uncompressedSize = length % chunkSize
+									} else {
+										uncompressedSize = chunkSize
+									}
+									uncompressed := make([]byte, uncompressedSize)
+									lz4.Uncompress(bytes, uncompressed)
+									bytes = uncompressed
 								}
-								uncompressed := make([]byte, uncompressedSize)
-								lz4.Uncompress(bytes, uncompressed)
-								bytes = uncompressed
 							}
 						}
+
 						if print {
 							fmt.Print(string(bytes))
 						} else {
@@ -450,6 +466,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			}
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
+			multipleTransactions := chunkCount > chunksPerTransaction
 			var totalWritten int64
 			var totalWrittenCompressed int64
 			var id []byte
@@ -490,7 +507,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 						}
 						tr.Add(countKey, one)
 						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
-						if chunkCount > chunksPerTransaction {
+						if multipleTransactions {
 							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						}
 						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
@@ -506,26 +523,32 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 								panic(err)
 							}
 							if chunk+1 < chunkCount && n != chunkSize {
-								fmt.Printf("Failed writing chunk %d./%d: written only %d/%d bytes.\n", chunk+1, chunkCount, n, chunkSize)
+								fmt.Printf("Failed writing chunk %d./%d: written only %d bytes.\n", chunk+1, chunkCount, n)
 								panic("Failed writing chunk.")
 							}
+							data := contentBuffer[:n]
 							switch compressionAlgorithm {
 							case 0: // none
-								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
+								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
 							case 1, 2: // lz4, lz4hc
-								compressed := make([]byte, lz4.CompressBound(contentBuffer[:n]))
+								compressed := make([]byte, lz4.CompressBound(data))
 								var compressedByteCount int
 								if compressionAlgorithm == 1 {
-									compressedByteCount, err = lz4.Compress(contentBuffer[:n], compressed)
+									compressedByteCount, err = lz4.Compress(data, compressed)
 								} else {
-									compressedByteCount, err = lz4.CompressHC(contentBuffer[:n], compressed)
+									compressedByteCount, err = lz4.CompressHC(data, compressed)
 								}
 								if err != nil {
 									panic(err)
 								}
-								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
-								tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
-								totalWrittenCompressed += int64(len(compressed[:compressedByteCount]))
+								if compressedByteCount < n {
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
+									totalWrittenCompressed += int64(compressedByteCount)
+								} else {
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
+									totalWrittenCompressed += int64(n)
+								}
 							}
 							totalWritten += int64(n)
 							chunk++
@@ -535,16 +558,16 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 						}
 					}
 					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
-					if chunk == chunkCount && chunkCount > chunksPerTransaction {
+					if chunk == chunkCount && multipleTransactions {
 						// Last transaction
 						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
 					return nil, nil
 				})
 				if verbose {
-					elapsed := time.Since(timeStarted)
 					currentPercent := int(100 * totalWritten / totalSize)
 					if lastPercent < currentPercent {
+						elapsed := time.Since(timeStarted)
 						fTotalWritten := float64(totalWritten)
 						var compressed float64
 						if totalWrittenCompressed == 0 {
@@ -587,6 +610,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 			}
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
+			multipleTransactions := chunkCount > chunksPerTransaction
 			var totalWritten int64
 			var totalWrittenCompressed int64
 			contentBuffer := make([]byte, chunkSize)
@@ -622,7 +646,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 						}
 						tr.Add(countKey, one)
 						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
-						if chunkCount > chunksPerTransaction {
+						if multipleTransactions {
 							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						}
 						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
@@ -638,26 +662,32 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 								panic(err)
 							}
 							if chunk+1 < chunkCount && n != chunkSize {
-								fmt.Printf("Failed writing chunk %d./%d: written only %d/%d\n", chunk+1, chunkCount, n, chunkSize)
+								fmt.Printf("Failed writing chunk %d./%d: written only %d\n", chunk+1, chunkCount, n)
 								panic("Failed writing chunk.")
 							}
+							data := contentBuffer[:n]
 							switch compressionAlgorithm {
 							case 0: // none
-								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), contentBuffer[:n])
+								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
 							case 1, 2: // lz4, lz4hc
-								compressed := make([]byte, lz4.CompressBound(contentBuffer[:n]))
+								compressed := make([]byte, lz4.CompressBound(data))
 								var compressedByteCount int
 								if compressionAlgorithm == 1 {
-									compressedByteCount, err = lz4.Compress(contentBuffer[:n], compressed)
+									compressedByteCount, err = lz4.Compress(data, compressed)
 								} else {
-									compressedByteCount, err = lz4.CompressHC(contentBuffer[:n], compressed)
+									compressedByteCount, err = lz4.CompressHC(data, compressed)
 								}
 								if err != nil {
 									panic(err)
 								}
-								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
-								tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
-								totalWrittenCompressed += int64(len(compressed[:compressedByteCount]))
+								if compressedByteCount < n {
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
+									totalWrittenCompressed += int64(compressedByteCount)
+								} else {
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
+									totalWrittenCompressed += int64(n)
+								}
 							}
 							totalWritten += int64(n)
 							chunk++
@@ -667,16 +697,16 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 						}
 					}
 					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
-					if chunk == chunkCount && chunkCount > chunksPerTransaction {
+					if chunk == chunkCount && multipleTransactions {
 						// Last transaction
 						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
 					return nil, nil
 				})
 				if verbose {
-					elapsed := time.Since(timeStarted)
 					currentPercent := int(100 * totalWritten / totalSize)
 					if lastPercent < currentPercent {
+						elapsed := time.Since(timeStarted)
 						fTotalWritten := float64(totalWritten)
 						var compressed float64
 						if totalWrittenCompressed == 0 {
