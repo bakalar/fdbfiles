@@ -25,10 +25,9 @@ const (
 )
 
 var (
-	one          = []byte{1, 0, 0, 0, 0, 0, 0, 0}
-	objectPath   = []string{"object"}
-	indexDirPath = []string{"object", "index", "name"}
-
+	one                   = []byte{1, 0, 0, 0, 0, 0, 0, 0}
+	objectPath            = []string{"object"}
+	indexDirPath          = []string{"object", "index", "name"}
 	compressionAlgorithms = []string{"none", "lz4"}
 )
 
@@ -41,28 +40,26 @@ func lengthToChunkCount(length int64) int64 {
 }
 
 func usage() {
-	fmt.Printf("Usage: %s [OPTION]... [COMMAND [NAME_OR_ID...]]\n\n", os.Args[0])
-	fmt.Println("Manipulate FoundationDB Object Store using the command line.")
-	fmt.Println("\nPossible commands include:")
-	fmt.Println("\tlist\t\tlist files; NAME is an optional prefix which listed filenames must begin with")
-	//fmt.Println("\tsearch\t\tsearch all files; NAME is a substring which listed filenames must contain")
-	fmt.Println("\tput\t\tadd files with given names")
-	fmt.Println("\tput_id\t\tadd files with given ids")
-	fmt.Println("\tget\t\tget files with given names")
-	fmt.Println("\tget_id\t\tget files with given ids")
-	fmt.Println("\tdelete\t\tdelete all files with given names")
-	fmt.Println("\tdelete_id\tdelete files with given ids")
-	fmt.Println("\ngeneral options:")
-	//fmt.Println("\t--help\t\tprint usage")
-	fmt.Println("\t--verbose\tbe more verbose.")
-	fmt.Println("\t--version\tprint the tool version and exit")
-	fmt.Println("\nstorage options:")
-	fmt.Println("\t--all_buckets\t\tshow all FoundationDB Object Store buckets when using list command")
-	fmt.Println("\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
-	fmt.Println("\t--bucket=BUCKET\t\tFoundationDB Object Store bucket to use (default: 'objectstorage1')")
-	fmt.Println("\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
-	fmt.Println("\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
-	fmt.Println("\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
+	fmt.Fprintf(os.Stderr, "Usage: %s [OPTION]... [COMMAND [NAME_OR_ID...]]\n\n", os.Args[0])
+	fmt.Fprintln(os.Stderr, "Manipulate FoundationDB Object Store using the command line.")
+	fmt.Fprintln(os.Stderr, "\nPossible commands include:")
+	fmt.Fprintln(os.Stderr, "\tlist\t\tlist objects; NAME is an optional prefix which listed objects must begin with")
+	fmt.Fprintln(os.Stderr, "\tput\t\tadd objects with given names")
+	fmt.Fprintln(os.Stderr, "\tput_id\t\tadd objects with given ids")
+	fmt.Fprintln(os.Stderr, "\tget\t\tget objects with given names")
+	fmt.Fprintln(os.Stderr, "\tget_id\t\tget objects with given ids")
+	fmt.Fprintln(os.Stderr, "\tdelete\t\tdelete all objects with given names")
+	fmt.Fprintln(os.Stderr, "\tdelete_id\tdelete objects with given ids")
+	fmt.Fprintln(os.Stderr, "\ngeneral options:")
+	fmt.Fprintln(os.Stderr, "\t--verbose\tbe more verbose.")
+	fmt.Fprintln(os.Stderr, "\t--version\tprint the tool version and exit")
+	fmt.Fprintln(os.Stderr, "\nstorage options:")
+	fmt.Fprintln(os.Stderr, "\t--all_buckets\t\tshow all FoundationDB Object Store buckets when using list command")
+	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
+	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB Object Store bucket to use (default: 'objectstorage1')")
+	fmt.Fprintln(os.Stderr, "\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
+	fmt.Fprintln(os.Stderr, "\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
+	fmt.Fprintln(os.Stderr, "\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
 }
 
 func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
@@ -227,7 +224,7 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 				index := _index[0].(int64)
 
 				if index+1 == int64(binary.LittleEndian.Uint64(objectCountFuture.MustGet())) {
-					// Need to reduce count so that (count - 1) always points to last file version.
+					// Need to reduce count so that (count - 1) always points to last object version.
 					bytes := make([]byte, 8)
 					binary.LittleEndian.PutUint64(bytes, uint64(index))
 					tr.Set(countKey, bytes)
@@ -351,7 +348,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, v
 			}
 			if verbose {
 				elapsed := time.Since(timeStarted)
-				fmt.Printf("Downloaded %s (%.2fMB/s).\n", name, float64(length)/1e6/elapsed.Seconds())
+				fmt.Fprintf(os.Stderr, "Downloaded %s (%.2fMB/s).\n", name, float64(length)/1e6/elapsed.Seconds())
 			}
 			finishChannel <- true
 		}(name1)
@@ -448,7 +445,7 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 			}
 			if verbose {
 				elapsed := time.Since(timeStarted)
-				fmt.Printf("Downloaded %s (%.2fMB/s).\n", id, float64(length)/1e6/elapsed.Seconds())
+				fmt.Fprintf(os.Stderr, "Downloaded %s (%.2fMB/s).\n", id, float64(length)/1e6/elapsed.Seconds())
 			}
 			finishChannel <- true
 		}(id1)
@@ -488,7 +485,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 				lz4CompressedBytes = make([]byte, lz4.CompressBound(chunkSize))
 			}
 			if verbose {
-				fmt.Printf("Uploading %s...\n", filename)
+				fmt.Fprintf(os.Stderr, "Uploading %s...\n", filename)
 			}
 			timeStarted := time.Now()
 			for {
@@ -537,7 +534,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 								panic(err)
 							}
 							if chunk+1 < chunkCount && n != chunkSize {
-								fmt.Printf("Failed writing chunk %d./%d: written only %d bytes.\n", chunk+1, chunkCount, n)
+								fmt.Fprintf(os.Stderr, "Failed writing chunk %d./%d: written only %d bytes.\n", chunk+1, chunkCount, n)
 								panic("Failed writing chunk.")
 							}
 							data := contentBuffer[:n]
@@ -584,7 +581,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 						} else {
 							compressed = float64(totalWrittenCompressed)
 						}
-						fmt.Printf("Uploaded %d%% of %s (%.2fMB/s; compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/compressed)
+						fmt.Fprintf(os.Stderr, "Uploaded %d%% of %s (%.2fMB/s; compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/compressed)
 						lastPercent = currentPercent
 					}
 				}
@@ -630,7 +627,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 				lz4CompressedBytes = make([]byte, lz4.CompressBound(chunkSize))
 			}
 			if verbose {
-				fmt.Printf("Uploading %s...\n", filename)
+				fmt.Fprintf(os.Stderr, "Uploading %s...\n", filename)
 			}
 			timeStarted := time.Now()
 			for {
@@ -675,7 +672,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 								panic(err)
 							}
 							if chunk+1 < chunkCount && n != chunkSize {
-								fmt.Printf("Failed writing chunk %d./%d: written only %d\n", chunk+1, chunkCount, n)
+								fmt.Fprintf(os.Stderr, "Failed writing chunk %d./%d: written only %d\n", chunk+1, chunkCount, n)
 								panic("Failed writing chunk.")
 							}
 							data := contentBuffer[:n]
@@ -722,7 +719,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 						} else {
 							compressed = float64(totalWrittenCompressed)
 						}
-						fmt.Printf("Uploaded %d%% of %s (%.2fMB/s; compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/compressed)
+						fmt.Fprintf(os.Stderr, "Uploaded %d%% of %s (%.2fMB/s; compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/compressed)
 						lastPercent = currentPercent
 					}
 				}
@@ -825,7 +822,7 @@ func main() {
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
 			}
-			finishChannel := make(chan bool)
+			var finishChannel chan bool
 			put(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
@@ -840,7 +837,7 @@ func main() {
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
 			}
-			finishChannel := make(chan bool)
+			var finishChannel chan bool
 			putID(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
