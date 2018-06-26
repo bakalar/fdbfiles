@@ -11,21 +11,25 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
-	"github.com/cloudflare/golz4"
+	"github.com/hungys/go-lz4"
 	"gopkg.in/mgo.v2/bson"
 )
 
 const (
 	chunkSize                   = 1e5
 	chunksPerTransaction        = 99
-	defaultCompressionAlgorithm = 1
+	defaultCompressionAlgorithm = compressionAlgorithmLZ4
+
+	compressionAlgorithmNone = 0
+	compressionAlgorithmLZ4  = 1
 )
 
 var (
-	one                   = []byte{1, 0, 0, 0, 0, 0, 0, 0}
-	objectPath            = []string{"object"}
-	indexDirPath          = []string{"object", "index", "name"}
-	compressionAlgorithms = []string{"none", "lz4", "lz4hc"}
+	one          = []byte{1, 0, 0, 0, 0, 0, 0, 0}
+	objectPath   = []string{"object"}
+	indexDirPath = []string{"object", "index", "name"}
+
+	compressionAlgorithms = []string{"none", "lz4"}
 )
 
 func lengthToChunkCount(length int64) int64 {
@@ -54,7 +58,7 @@ func usage() {
 	fmt.Println("\t--version\tprint the tool version and exit")
 	fmt.Println("\nstorage options:")
 	fmt.Println("\t--all_buckets\t\tshow all FoundationDB Object Store buckets when using list command")
-	fmt.Println("\t--compression=ALGO\tchoose compression algorithm: 'none', 'lz4' (default) or 'lz4hc'")
+	fmt.Println("\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
 	fmt.Println("\t--bucket=BUCKET\t\tFoundationDB Object Store bucket to use (default: 'objectstorage1')")
 	fmt.Println("\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
 	fmt.Println("\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
@@ -309,7 +313,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, v
 							v, _ := tuple.Unpack(compressionAlgo)
 							if v != nil {
 								switch v[0].(int64) {
-								case 1, 2: // lz4, lz4hc
+								case compressionAlgorithmLZ4:
 									var uncompressedSize int64
 									if chunk+1 == chunkCount {
 										uncompressedSize = length % chunkSize
@@ -317,7 +321,10 @@ func get(localName string, db fdb.Database, bucketName string, names []string, v
 										uncompressedSize = chunkSize
 									}
 									uncompressed := make([]byte, uncompressedSize)
-									lz4.Uncompress(bytes, uncompressed)
+									_, err = lz4.DecompressSafe(bytes, uncompressed)
+									if err != nil {
+										panic(err)
+									}
 									bytes = uncompressed
 								}
 							}
@@ -403,7 +410,7 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 							v, _ := tuple.Unpack(compressionAlgo)
 							if v != nil {
 								switch v[0].(int64) {
-								case 1, 2: // lz4, lz4hc
+								case compressionAlgorithmLZ4:
 									var uncompressedSize int64
 									if chunk+1 == chunkCount {
 										uncompressedSize = length % chunkSize
@@ -411,7 +418,10 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 										uncompressedSize = chunkSize
 									}
 									uncompressed := make([]byte, uncompressedSize)
-									lz4.Uncompress(bytes, uncompressed)
+									_, err = lz4.DecompressSafe(bytes, uncompressed)
+									if err != nil {
+										panic(err)
+									}
 									bytes = uncompressed
 								}
 							}
@@ -473,6 +483,10 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			contentBuffer := make([]byte, chunkSize)
 			var chunk int64
 			var lastPercent int
+			var lz4CompressedBytes []byte
+			if compressionAlgorithm == compressionAlgorithmLZ4 {
+				lz4CompressedBytes = make([]byte, lz4.CompressBound(chunkSize))
+			}
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
@@ -528,21 +542,16 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 							}
 							data := contentBuffer[:n]
 							switch compressionAlgorithm {
-							case 0: // none
+							case compressionAlgorithmNone:
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
-							case 1, 2: // lz4, lz4hc
-								compressed := make([]byte, lz4.CompressBound(data))
+							case compressionAlgorithmLZ4:
 								var compressedByteCount int
-								if compressionAlgorithm == 1 {
-									compressedByteCount, err = lz4.Compress(data, compressed)
-								} else {
-									compressedByteCount, err = lz4.CompressHC(data, compressed)
-								}
+								compressedByteCount, err = lz4.CompressDefault(data, lz4CompressedBytes)
 								if err != nil {
 									panic(err)
 								}
 								if compressedByteCount < n {
-									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), lz4CompressedBytes[:compressedByteCount])
 									tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
 									totalWrittenCompressed += int64(compressedByteCount)
 								} else {
@@ -616,6 +625,10 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 			contentBuffer := make([]byte, chunkSize)
 			var chunk int64
 			var lastPercent int
+			var lz4CompressedBytes []byte
+			if compressionAlgorithm == compressionAlgorithmLZ4 {
+				lz4CompressedBytes = make([]byte, lz4.CompressBound(chunkSize))
+			}
 			if verbose {
 				fmt.Printf("Uploading %s...\n", filename)
 			}
@@ -667,21 +680,16 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 							}
 							data := contentBuffer[:n]
 							switch compressionAlgorithm {
-							case 0: // none
+							case compressionAlgorithmNone:
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
-							case 1, 2: // lz4, lz4hc
-								compressed := make([]byte, lz4.CompressBound(data))
+							case compressionAlgorithmLZ4:
 								var compressedByteCount int
-								if compressionAlgorithm == 1 {
-									compressedByteCount, err = lz4.Compress(data, compressed)
-								} else {
-									compressedByteCount, err = lz4.CompressHC(data, compressed)
-								}
+								compressedByteCount, err = lz4.CompressDefault(data, lz4CompressedBytes)
 								if err != nil {
 									panic(err)
 								}
 								if compressedByteCount < n {
-									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), compressed[:compressedByteCount])
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), lz4CompressedBytes[:compressedByteCount])
 									tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
 									totalWrittenCompressed += int64(compressedByteCount)
 								} else {
