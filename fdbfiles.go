@@ -41,7 +41,7 @@ func lengthToChunkCount(length int64) int64 {
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s [OPTION]... [COMMAND [NAME_OR_ID...]]\n\n", os.Args[0])
-	fmt.Fprintln(os.Stderr, "Manipulate FoundationDB Object Store using the command line.")
+	fmt.Fprintln(os.Stderr, "Manipulate FoundationDB object store using the command line.")
 	fmt.Fprintln(os.Stderr, "\nPossible commands include:")
 	fmt.Fprintln(os.Stderr, "\tlist\t\tlist objects; NAME is an optional prefix which listed objects must begin with")
 	fmt.Fprintln(os.Stderr, "\tput\t\tadd objects with given names")
@@ -54,9 +54,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\t--verbose\tbe more verbose.")
 	fmt.Fprintln(os.Stderr, "\t--version\tprint the tool version and exit")
 	fmt.Fprintln(os.Stderr, "\nstorage options:")
-	fmt.Fprintln(os.Stderr, "\t--all_buckets\t\tshow all FoundationDB Object Store buckets when using list command")
+	fmt.Fprintln(os.Stderr, "\t--all_buckets\t\tshow all FoundationDB object store buckets when using list command")
 	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
-	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB Object Store bucket to use (default: 'objectstorage1')")
+	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB object store bucket to use (default: 'objectstorage1')")
 	fmt.Fprintln(os.Stderr, "\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
 	fmt.Fprintln(os.Stderr, "\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
 	fmt.Fprintln(os.Stderr, "\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
@@ -746,7 +746,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180622\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180626\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
