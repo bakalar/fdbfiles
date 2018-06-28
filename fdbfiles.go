@@ -98,16 +98,16 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 			kv := ri.MustGet()
 			t, _ := tuple.Unpack(kv.Key)
 			if t[3] != "count" {
-				_id := bson.ObjectId(kv.Value)
-				id := []byte(_id)
-				lengthKey := objectDir.Pack(tuple.Tuple{id, "len"})
+				lengthKey := objectDir.Pack(tuple.Tuple{kv.Value, "len"})
 				lengthValueFuture := tr.Get(lengthKey)
 
-				partialKey := objectDir.Pack(tuple.Tuple{id, "partial"})
+				partialKey := objectDir.Pack(tuple.Tuple{kv.Value, "partial"})
 				partialValueFuture := tr.Get(partialKey)
 
-				uploadDateKey := objectDir.Pack(tuple.Tuple{id, "meta", "uploadDate"})
+				uploadDateKey := objectDir.Pack(tuple.Tuple{kv.Value, "meta", "uploadDate"})
 				uploadDateFuture := tr.Get(uploadDateKey)
+
+				_id := bson.ObjectId(kv.Value)
 
 				v, err := tuple.Unpack(lengthValueFuture.MustGet())
 				if err != nil {
@@ -181,8 +181,7 @@ func delete(db fdb.Database, bucketName string, names []string, finishChannel ch
 				ri := tr.GetRange(keyRange, fdb.RangeOptions{}).Iterator()
 				for ri.Advance() {
 					kv := ri.MustGet()
-					id := bson.ObjectId(kv.Value)
-					objectPrefixKey := objectDir.Pack(tuple.Tuple{[]byte(id)})
+					objectPrefixKey := objectDir.Pack(tuple.Tuple{kv.Value})
 					objectPrefixRange, err := fdb.PrefixRange(objectPrefixKey)
 					if err != nil {
 						continue // Object already deleted.
@@ -201,8 +200,7 @@ func delete(db fdb.Database, bucketName string, names []string, finishChannel ch
 func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
-			_id := bson.ObjectIdHex(id)
-			idBytes := []byte(_id)
+			idBytes := []byte(bson.ObjectIdHex(id))
 			db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 				indexDir, err := directory.Open(tr, indexDirPath, nil)
 				if err != nil {
@@ -361,7 +359,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, v
 func getID(localName string, db fdb.Database, ids []string, verbose bool, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
-			_id := bson.ObjectIdHex(id)
+			idBytes := []byte(bson.ObjectIdHex(id))
 			var length int64
 			var chunkCount int64
 			var f *os.File
@@ -390,7 +388,7 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 					}
 
 					if chunk == 0 {
-						lengthKey := dir.Pack(tuple.Tuple{[]byte(_id), "len"})
+						lengthKey := dir.Pack(tuple.Tuple{idBytes, "len"})
 						v, err := tuple.Unpack(tr.Get(lengthKey).MustGet())
 						if err != nil {
 							panic(err)
@@ -399,9 +397,9 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 						chunkCount = lengthToChunkCount(length)
 					}
 					for chunk < chunkCount {
-						key := dir.Pack(tuple.Tuple{[]byte(_id), chunk})
+						key := dir.Pack(tuple.Tuple{idBytes, chunk})
 						bytesFuture := tr.Get(key)
-						compressionKey := dir.Pack(tuple.Tuple{[]byte(_id), chunk, "c"})
+						compressionKey := dir.Pack(tuple.Tuple{idBytes, chunk, "c"})
 						compressionAlgoFuture := tr.Get(compressionKey)
 						bytes := bytesFuture.MustGet()
 
