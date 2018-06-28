@@ -58,6 +58,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
 	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB object store bucket to use (default: 'objectstorage1')")
 	fmt.Fprintln(os.Stderr, "\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
+	fmt.Fprintln(os.Stderr, "\t--datacenter=ID\t\tspecify the datacenter ID")
+	fmt.Fprintln(os.Stderr, "\t--machine=ID\t\tspecify the machine ID")
 	fmt.Fprintln(os.Stderr, "\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
 	fmt.Fprintln(os.Stderr, "\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
 }
@@ -169,9 +171,9 @@ func delete(db fdb.Database, bucketName string, names []string, finishChannel ch
 				if objectCountValue == nil {
 					return nil, nil
 				}
-				objectCount := int64(binary.LittleEndian.Uint64(objectCountValue))
+				objectCount := binary.LittleEndian.Uint64(objectCountValue)
 
-				endKey := indexDir.Pack(tuple.Tuple{bucketName, name, objectCount})
+				endKey := indexDir.Pack(tuple.Tuple{bucketName, name, int64(objectCount)})
 				keyRange := fdb.KeyRange{
 					Begin: startKey,
 					End:   endKey,
@@ -199,8 +201,9 @@ func delete(db fdb.Database, bucketName string, names []string, finishChannel ch
 func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
+			_id := bson.ObjectIdHex(id)
+			idBytes := []byte(_id)
 			db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-				_id := bson.ObjectIdHex(id)
 				indexDir, err := directory.Open(tr, indexDirPath, nil)
 				if err != nil {
 					panic(err)
@@ -210,9 +213,9 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 					panic(err)
 				}
 
-				bucketNameFuture := tr.Get(objectDir.Pack(tuple.Tuple{[]byte(_id), "bucket"}))
-				nameFuture := tr.Get(objectDir.Pack(tuple.Tuple{[]byte(_id), "name"}))
-				ndxFuture := tr.Get(objectDir.Pack(tuple.Tuple{[]byte(_id), "ndx"}))
+				bucketNameFuture := tr.Get(objectDir.Pack(tuple.Tuple{idBytes, "bucket"}))
+				nameFuture := tr.Get(objectDir.Pack(tuple.Tuple{idBytes, "name"}))
+				ndxFuture := tr.Get(objectDir.Pack(tuple.Tuple{idBytes, "ndx"}))
 
 				bucketName := string(bucketNameFuture.MustGet())
 				name := string(nameFuture.MustGet())
@@ -221,19 +224,19 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 				objectCountFuture := tr.Get(countKey)
 
 				_index, err := tuple.Unpack(ndxFuture.MustGet())
-				index := _index[0].(int64)
+				index := uint64(_index[0].(int64))
 
-				if index+1 == int64(binary.LittleEndian.Uint64(objectCountFuture.MustGet())) {
+				if index+1 == binary.LittleEndian.Uint64(objectCountFuture.MustGet()) {
 					// Need to reduce count so that (count - 1) always points to last object version.
 					bytes := make([]byte, 8)
-					binary.LittleEndian.PutUint64(bytes, uint64(index))
+					binary.LittleEndian.PutUint64(bytes, index)
 					tr.Set(countKey, bytes)
 				}
 
-				objectPrefixRange, err := fdb.PrefixRange(objectDir.Pack(tuple.Tuple{[]byte(_id)}))
+				objectPrefixRange, err := fdb.PrefixRange(objectDir.Pack(tuple.Tuple{idBytes}))
 				tr.ClearRange(objectPrefixRange)
 
-				indexPrefixRange, err := fdb.PrefixRange(indexDir.Pack(tuple.Tuple{bucketName, name, index}))
+				indexPrefixRange, err := fdb.PrefixRange(indexDir.Pack(tuple.Tuple{bucketName, name, int64(index)}))
 				tr.ClearRange(indexPrefixRange)
 
 				return nil, nil
@@ -284,8 +287,8 @@ func get(localName string, db fdb.Database, bucketName string, names []string, v
 						if countValue == nil {
 							return nil, nil
 						}
-						count := int64(binary.LittleEndian.Uint64(countValue))
-						nameKey := indexDir.Pack(tuple.Tuple{bucketName, name, count - 1}) // Uzmi najnoviju datoteku tog imena.
+						count := binary.LittleEndian.Uint64(countValue)
+						nameKey := indexDir.Pack(tuple.Tuple{bucketName, name, int64(count - 1)}) // Uzmi najnoviju datoteku tog imena.
 						id = tr.Get(nameKey).MustGet()
 						if err != nil {
 							panic(err)
@@ -732,12 +735,19 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 	}
 }
 
-func database(clusterFile string) fdb.Database {
+func database(clusterFile string, datacenter string, machine string) fdb.Database {
 	fdb.MustAPIVersion(510)
 	if clusterFile == "" {
 		return fdb.MustOpenDefault()
 	}
-	return fdb.MustOpen(clusterFile, []byte("DB"))
+	db := fdb.MustOpen(clusterFile, []byte("DB"))
+	if datacenter != "" {
+		db.Options().SetDatacenterId(datacenter)
+	}
+	if machine != "" {
+		db.Options().SetMachineId(machine)
+	}
+	return db
 }
 
 func main() {
@@ -758,6 +768,8 @@ func main() {
 	var tags map[string]string
 	compressionAlgorithm := defaultCompressionAlgorithm
 	var argsIndex int
+	var datacenter string
+	var machine string
 	for i := 1; i < len(os.Args); i++ {
 		if !strings.HasPrefix(os.Args[i], "-") {
 			cmd = os.Args[i]
@@ -792,6 +804,12 @@ func main() {
 				return
 			}
 		}
+		if strings.HasPrefix(os.Args[i], "--datacenter=") {
+			datacenter = strings.SplitAfter(os.Args[i], "=")[1]
+		}
+		if strings.HasPrefix(os.Args[i], "--machine=") {
+			machine = strings.SplitAfter(os.Args[i], "=")[1]
+		}
 		if strings.HasPrefix(os.Args[i], "--metadata=") {
 			tag := strings.SplitAfter(os.Args[i], "=")[1]
 			value := strings.SplitAfter(os.Args[i], "=")[2]
@@ -807,7 +825,7 @@ func main() {
 	var db fdb.Database
 	switch cmd {
 	case "list":
-		db = database(clusterFile)
+		db = database(clusterFile, datacenter, machine)
 		var prefix string
 		if argsIndex >= 0 {
 			prefix = os.Args[argsIndex]
@@ -817,7 +835,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile)
+			db = database(clusterFile, datacenter, machine)
 			uniqueNames := make(map[string]bool)
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
@@ -832,7 +850,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile)
+			db = database(clusterFile, datacenter, machine)
 			uniqueNames := make(map[string]bool)
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
@@ -847,7 +865,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile)
+			db = database(clusterFile, datacenter, machine)
 			finishChannel := make(chan bool)
 			get(localName, db, bucketName, os.Args[argsIndex:], verbose, finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
@@ -858,7 +876,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile)
+			db = database(clusterFile, datacenter, machine)
 			finishChannel := make(chan bool)
 			getID(localName, db, os.Args[argsIndex:], verbose, finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
@@ -869,7 +887,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile)
+			db = database(clusterFile, datacenter, machine)
 			finishChannel := make(chan bool)
 			delete(db, bucketName, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
@@ -880,7 +898,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile)
+			db = database(clusterFile, datacenter, machine)
 			finishChannel := make(chan bool)
 			deleteID(db, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
