@@ -754,7 +754,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180626\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180628\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
