@@ -754,7 +754,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180628\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180702\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
@@ -838,7 +838,7 @@ func main() {
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
 			}
-			var finishChannel chan bool
+			finishChannel := make(chan bool)
 			put(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
@@ -853,7 +853,7 @@ func main() {
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
 			}
-			var finishChannel chan bool
+			finishChannel := make(chan bool)
 			putID(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
