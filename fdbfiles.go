@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,12 +17,12 @@ import (
 )
 
 const (
-	chunkSize                   = 1e5
-	chunksPerTransaction        = 99
-	defaultCompressionAlgorithm = compressionAlgorithmLZ4
+	chunkSize            = 1e5
+	chunksPerTransaction = 99
 
-	compressionAlgorithmNone = 0
-	compressionAlgorithmLZ4  = 1
+	compressionAlgorithmUnset = -1
+	compressionAlgorithmNone  = 0
+	compressionAlgorithmLZ4   = 1
 )
 
 var (
@@ -37,6 +38,56 @@ func lengthToChunkCount(length int64) int64 {
 		count++
 	}
 	return count
+}
+
+func doCompress(filename string) bool {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case
+		".7z",
+		".bz2",
+		".deb",
+		".dmg",
+		".docx",
+		".docm",
+		".dotx",
+		".dotm",
+		".gif",
+		".gz",
+		".jar",
+		".jpg",
+		".jpeg",
+		".mp4",
+		".opus",
+		".pdf",
+		".png",
+		".pptx",
+		".pptm",
+		".potx",
+		".potm",
+		".ppam",
+		".ppsx",
+		".ppsm",
+		".rar",
+		".tgz",
+		".txz",
+		".xlsx",
+		".xlsm",
+		".xltx",
+		".xltm",
+		".xlam",
+		".xz",
+		".vsdx",
+		".vsdm",
+		".vssx",
+		".vssm",
+		".vstx",
+		".vstm",
+		".vsix",
+		".zip":
+		return false
+	default:
+		return true
+	}
 }
 
 func usage() {
@@ -469,7 +520,14 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 }
 
 func put(localName string, db fdb.Database, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
-	compressionAlgoValue := tuple.Tuple{compressionAlgorithm}.Pack()
+	var compressionAlgoValue []byte = nil
+	switch compressionAlgorithm {
+	case compressionAlgorithmUnset:
+		compressionAlgoValue = tuple.Tuple{compressionAlgorithmLZ4}.Pack()
+	case compressionAlgorithmNone:
+	default:
+		compressionAlgoValue = tuple.Tuple{compressionAlgorithm}.Pack()
+	}
 	for name1 := range uniqueNames {
 		go func(name string) {
 			var filename string
@@ -497,7 +555,17 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			var chunk int64
 			var lastPercent int
 			var lz4CompressedBytes []byte
-			if compressionAlgorithm == compressionAlgorithmLZ4 {
+			var myCompressionAlgorithm int
+			if compressionAlgorithm == compressionAlgorithmUnset {
+				if doCompress(filename) {
+					myCompressionAlgorithm = compressionAlgorithmLZ4
+				} else {
+					myCompressionAlgorithm = compressionAlgorithmNone
+				}
+			} else {
+				myCompressionAlgorithm = compressionAlgorithm
+			}
+			if myCompressionAlgorithm == compressionAlgorithmLZ4 {
 				lz4CompressedBytes = make([]byte, lz4.CompressBound(chunkSize))
 			}
 			if verbose {
@@ -554,7 +622,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 								panic("Failed writing chunk.")
 							}
 							data := contentBuffer[:n]
-							switch compressionAlgorithm {
+							switch myCompressionAlgorithm {
 							case compressionAlgorithmNone:
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
 							case compressionAlgorithmLZ4:
@@ -611,7 +679,14 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 }
 
 func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
-	compressionAlgoValue := tuple.Tuple{compressionAlgorithm}.Pack()
+	var compressionAlgoValue []byte = nil
+	switch compressionAlgorithm {
+	case compressionAlgorithmUnset:
+		compressionAlgoValue = tuple.Tuple{compressionAlgorithmLZ4}.Pack()
+	case compressionAlgorithmNone:
+	default:
+		compressionAlgoValue = tuple.Tuple{compressionAlgorithm}.Pack()
+	}
 	for id1 := range uniqueIds {
 		go func(idString string) {
 			id := []byte(bson.ObjectIdHex(idString))
@@ -639,7 +714,17 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 			var chunk int64
 			var lastPercent int
 			var lz4CompressedBytes []byte
-			if compressionAlgorithm == compressionAlgorithmLZ4 {
+			var myCompressionAlgorithm int
+			if compressionAlgorithm == compressionAlgorithmUnset {
+				if doCompress(filename) {
+					myCompressionAlgorithm = compressionAlgorithmLZ4
+				} else {
+					myCompressionAlgorithm = compressionAlgorithmNone
+				}
+			} else {
+				myCompressionAlgorithm = compressionAlgorithm
+			}
+			if myCompressionAlgorithm == compressionAlgorithmLZ4 {
 				lz4CompressedBytes = make([]byte, lz4.CompressBound(chunkSize))
 			}
 			if verbose {
@@ -692,7 +777,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 								panic("Failed writing chunk.")
 							}
 							data := contentBuffer[:n]
-							switch compressionAlgorithm {
+							switch myCompressionAlgorithm {
 							case compressionAlgorithmNone:
 								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
 							case compressionAlgorithmLZ4:
@@ -779,7 +864,7 @@ func main() {
 	allBuckets := false
 	var clusterFile string
 	var tags map[string]string
-	compressionAlgorithm := defaultCompressionAlgorithm
+	compressionAlgorithm := compressionAlgorithmUnset
 	var argsIndex int
 	var datacenter string
 	var machine string
