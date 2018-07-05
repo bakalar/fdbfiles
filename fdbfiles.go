@@ -50,18 +50,18 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\tget_id\t\tget objects with given ids")
 	fmt.Fprintln(os.Stderr, "\tdelete\t\tdelete all objects with given names")
 	fmt.Fprintln(os.Stderr, "\tdelete_id\tdelete objects with given ids")
-	fmt.Fprintln(os.Stderr, "\ngeneral options:")
-	fmt.Fprintln(os.Stderr, "\t--verbose\tbe more verbose.")
-	fmt.Fprintln(os.Stderr, "\t--version\tprint the tool version and exit")
-	fmt.Fprintln(os.Stderr, "\nstorage options:")
+	fmt.Fprintln(os.Stderr, "\noptions:")
 	fmt.Fprintln(os.Stderr, "\t--all_buckets\t\tshow all FoundationDB object store buckets when using list command")
-	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
 	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB object store bucket to use (default: 'objectstorage1')")
 	fmt.Fprintln(os.Stderr, "\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
+	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
 	fmt.Fprintln(os.Stderr, "\t--datacenter=ID\t\tspecify the datacenter ID")
+	fmt.Fprintln(os.Stderr, "\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
 	fmt.Fprintln(os.Stderr, "\t--machine=ID\t\tspecify the machine ID")
 	fmt.Fprintln(os.Stderr, "\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
-	fmt.Fprintln(os.Stderr, "\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
+	fmt.Fprintln(os.Stderr, "\t--partial\t\tdon't skip a partially uploaded object when getting")
+	fmt.Fprintln(os.Stderr, "\t--verbose\t\tbe more verbose")
+	fmt.Fprintln(os.Stderr, "\t--version\t\tprint the tool version and exit")
 }
 
 func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
@@ -244,7 +244,7 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 	}
 }
 
-func get(localName string, db fdb.Database, bucketName string, names []string, verbose bool, finishChannel chan bool) {
+func get(localName string, db fdb.Database, bucketName string, names []string, allowPartial, verbose bool, finishChannel chan bool) {
 	for _, name1 := range names {
 		go func(name string) {
 			var length int64
@@ -285,19 +285,34 @@ func get(localName string, db fdb.Database, bucketName string, names []string, v
 						if countValue == nil {
 							return nil, nil
 						}
-						count := binary.LittleEndian.Uint64(countValue)
-						nameKey := indexDir.Pack(tuple.Tuple{bucketName, name, int64(count - 1)}) // Uzmi najnoviju datoteku tog imena.
-						id = tr.Get(nameKey).MustGet()
-						if err != nil {
-							panic(err)
+						for count := binary.LittleEndian.Uint64(countValue); ; count-- {
+							nameKey := indexDir.Pack(tuple.Tuple{bucketName, name, int64(count - 1)}) // Uzmi najnoviju datoteku tog imena.
+							id = tr.Get(nameKey).MustGet()
+							if err != nil {
+								panic(err)
+							}
+							var isValid bool
+							if allowPartial {
+								isValid = true
+							} else {
+								partialKey := dir.Pack(tuple.Tuple{id, "partial"})
+								partialValueFuture := tr.Get(partialKey)
+								isValid = partialValueFuture.MustGet() == nil
+							}
+							if isValid {
+								lengthKey := dir.Pack(tuple.Tuple{id, "len"})
+								v, err := tuple.Unpack(tr.Get(lengthKey).MustGet())
+								if err != nil {
+									panic(err)
+								}
+								length = v[0].(int64)
+								chunkCount = lengthToChunkCount(length)
+								break
+							}
+							if count == 0 {
+								panic("Non-partial upload not found.")
+							}
 						}
-						lengthKey := dir.Pack(tuple.Tuple{id, "len"})
-						v, err := tuple.Unpack(tr.Get(lengthKey).MustGet())
-						if err != nil {
-							panic(err)
-						}
-						length = v[0].(int64)
-						chunkCount = lengthToChunkCount(length)
 					}
 					for chunk < chunkCount {
 						key := dir.Pack(tuple.Tuple{id, chunk})
@@ -754,7 +769,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180702\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180705\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
@@ -768,6 +783,7 @@ func main() {
 	var argsIndex int
 	var datacenter string
 	var machine string
+	allowPartial := false
 	for i := 1; i < len(os.Args); i++ {
 		if !strings.HasPrefix(os.Args[i], "-") {
 			cmd = os.Args[i]
@@ -815,6 +831,9 @@ func main() {
 		}
 		if strings.HasPrefix(os.Args[i], "--local=") {
 			localName = strings.SplitAfter(os.Args[i], "=")[1]
+		}
+		if strings.HasPrefix(os.Args[i], "--partial") {
+			allowPartial = true
 		}
 		if strings.HasPrefix(os.Args[i], "--verbose") {
 			verbose = true
@@ -865,7 +884,7 @@ func main() {
 		} else {
 			db = database(clusterFile, datacenter, machine)
 			finishChannel := make(chan bool)
-			get(localName, db, bucketName, os.Args[argsIndex:], verbose, finishChannel)
+			get(localName, db, bucketName, os.Args[argsIndex:], allowPartial, verbose, finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
