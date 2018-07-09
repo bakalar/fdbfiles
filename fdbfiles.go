@@ -99,6 +99,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\tput_id\t\tadd objects with given ids")
 	fmt.Fprintln(os.Stderr, "\tget\t\tget objects with given names")
 	fmt.Fprintln(os.Stderr, "\tget_id\t\tget objects with given ids")
+	fmt.Fprintln(os.Stderr, "\tresume\t\tresume getting objects with given ids")
 	fmt.Fprintln(os.Stderr, "\tdelete\t\tdelete all objects with given names")
 	fmt.Fprintln(os.Stderr, "\tdelete_id\tdelete objects with given ids")
 	fmt.Fprintln(os.Stderr, "\noptions:")
@@ -678,7 +679,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 	}
 }
 
-func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
+func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, resume, verbose bool, finishChannel chan bool) {
 	var compressionAlgoValue []byte = nil
 	switch compressionAlgorithm {
 	case compressionAlgorithmUnset:
@@ -707,7 +708,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 			}
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
-			multipleTransactions := chunkCount > chunksPerTransaction
+			var multipleTransactions bool
 			var totalWritten int64
 			var totalWrittenCompressed int64
 			contentBuffer := make([]byte, chunkSize)
@@ -737,36 +738,55 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 					if err != nil {
 						panic(err)
 					}
+					lenKey := dir.Pack(tuple.Tuple{id, "len"})
 					if chunk == 0 {
 						nameKey := dir.Pack(tuple.Tuple{id, "name"})
-						if tr.Get(nameKey).MustGet() != nil {
+						if !resume && tr.Get(nameKey).MustGet() != nil {
 							panic("Object with given id already exists!")
+						} else if resume && tr.Get(nameKey).MustGet() == nil {
+							panic("Object with given id doesn't exist!")
 						}
-						tr.Set(nameKey, []byte(filename))
-						tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
-
-						indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
-						countTuple := tuple.Tuple{bucketName, filename, "count"}
-						countKey := indexDir.Pack(countTuple)
-						oldCountValue := tr.Get(countKey).MustGet()
-						var oldCount int64
-						if oldCountValue == nil {
-							oldCount = 0
+						if resume {
+							lenFuture := tr.Get(lenKey)
+							lenValue := lenFuture.MustGet()
+							if lenValue == nil {
+								panic("Missing len key")
+							}
+							lenValueUnpacked, err := tuple.Unpack(lenValue)
+							if err != nil {
+								panic(err)
+							}
+							totalWritten = lenValueUnpacked[0].(int64)
+							f.Seek(totalWritten, 0)
+							chunk = totalWritten / chunkSize
 						} else {
-							oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
+							tr.Set(nameKey, []byte(filename))
+							tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
+
+							indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
+							countTuple := tuple.Tuple{bucketName, filename, "count"}
+							countKey := indexDir.Pack(countTuple)
+							oldCountValue := tr.Get(countKey).MustGet()
+							var oldCount int64
+							if oldCountValue == nil {
+								oldCount = 0
+							} else {
+								oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
+							}
+							tr.Add(countKey, one)
+							tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
+							tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+							tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
+							for key, value := range tags {
+								tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
+							}
 						}
-						tr.Add(countKey, one)
-						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
-						if multipleTransactions {
+						multipleTransactions = resume || chunkCount > chunksPerTransaction
+						if multipleTransactions && !resume {
 							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						}
-						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
-						tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
-						for key, value := range tags {
-							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
-						}
 					}
-					if totalSize > 0 {
+					if (totalSize - totalWritten) > 0 {
 						for {
 							n, err := f.Read(contentBuffer)
 							if err != nil && err != io.EOF {
@@ -802,14 +822,14 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 							}
 						}
 					}
-					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
+					tr.Set(lenKey, tuple.Tuple{totalWritten}.Pack())
 					if chunk == chunkCount && multipleTransactions {
 						// Last transaction
 						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
 					return nil, nil
 				})
-				if verbose {
+				if verbose && !resume {
 					currentPercent := int(100 * totalWritten / totalSize)
 					if lastPercent < currentPercent {
 						elapsed := time.Since(timeStarted)
@@ -854,7 +874,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180705\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180709\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
@@ -948,7 +968,7 @@ func main() {
 				<-finishChannel
 			}
 		}
-	case "put_id":
+	case "put_id", "resume":
 		if argsIndex < 0 {
 			usage()
 		} else {
@@ -958,7 +978,7 @@ func main() {
 				uniqueNames[val] = true
 			}
 			finishChannel := make(chan bool)
-			putID(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
+			putID(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, cmd == "resume", verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
 			}
