@@ -276,7 +276,10 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 				_index, err := tuple.Unpack(ndxFuture.MustGet())
 				index := uint64(_index[0].(int64))
 
-				if index+1 == binary.LittleEndian.Uint64(objectCountFuture.MustGet()) {
+				if index == 0 {
+					// Last file with this name
+					tr.Clear(countKey)
+				} else if index+1 == binary.LittleEndian.Uint64(objectCountFuture.MustGet()) {
 					// Need to reduce count so that (count - 1) always points to last object version.
 					bytes := make([]byte, 8)
 					binary.LittleEndian.PutUint64(bytes, index)
@@ -880,7 +883,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180709\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180710\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
