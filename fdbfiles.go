@@ -708,7 +708,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 			}
 			totalSize := fi.Size()
 			chunkCount := lengthToChunkCount(totalSize)
-			var multipleTransactions bool
+			var removePartial bool
 			var totalWritten int64
 			var totalWrittenCompressed int64
 			contentBuffer := make([]byte, chunkSize)
@@ -746,6 +746,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 						} else if resume && tr.Get(nameKey).MustGet() == nil {
 							panic("Object with given id doesn't exist!")
 						}
+						var setPartial bool
 						if resume {
 							lenFuture := tr.Get(lenKey)
 							lenValue := lenFuture.MustGet()
@@ -757,8 +758,12 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 								panic(err)
 							}
 							totalWritten = lenValueUnpacked[0].(int64)
+							if totalSize <= totalWritten {
+								panic("File is not larger than written object!")
+							}
 							f.Seek(totalWritten, 0)
 							chunk = totalWritten / chunkSize
+							removePartial = true
 						} else {
 							tr.Set(nameKey, []byte(filename))
 							tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
@@ -780,9 +785,10 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 							for key, value := range tags {
 								tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
 							}
+							removePartial = chunkCount > chunksPerTransaction
 						}
-						multipleTransactions = resume || chunkCount > chunksPerTransaction
-						if multipleTransactions && !resume {
+						setPartial = (chunkCount - chunk) > chunksPerTransaction
+						if setPartial {
 							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						}
 					}
@@ -823,7 +829,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 						}
 					}
 					tr.Set(lenKey, tuple.Tuple{totalWritten}.Pack())
-					if chunk == chunkCount && multipleTransactions {
+					if removePartial && chunk == chunkCount {
 						// Last transaction
 						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
