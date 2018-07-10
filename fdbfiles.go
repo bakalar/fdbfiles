@@ -28,7 +28,7 @@ const (
 var (
 	one                   = []byte{1, 0, 0, 0, 0, 0, 0, 0}
 	objectPath            = []string{"object"}
-	indexDirPath          = []string{"object", "index", "name"}
+	nameIndexDirPrefix    = []string{"object", "index", "name"}
 	compressionAlgorithms = []string{"none", "lz4"}
 )
 
@@ -118,77 +118,85 @@ func usage() {
 
 func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 	db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
-		indexDir, err := directory.Open(tr, indexDirPath, nil)
-		if err != nil {
-			panic(err)
-		}
-		objectDir, err := directory.Open(tr, objectPath, nil)
-		if err != nil {
-			panic(err)
-		}
-
-		var ri *fdb.RangeIterator
+		var bucketNames []string
+		var err error
 		if allBuckets {
-			ri = tr.GetRange(indexDir, fdb.RangeOptions{}).Iterator()
+			bucketNames, err = directory.List(tr, nameIndexDirPrefix)
+			if err != nil {
+				panic(err)
+			}
 		} else {
-			key := indexDir.Pack(tuple.Tuple{bucketName})
-			var prefixKey []byte
+			bucketNames = []string{bucketName}
+		}
+		for _, bucketName1 := range bucketNames {
+			indexDir, err := directory.Open(tr, append(nameIndexDirPrefix, bucketName1), nil)
+			if err != nil {
+				panic(err)
+			}
+			objectDir, err := directory.Open(tr, objectPath, nil)
+			if err != nil {
+				panic(err)
+			}
+
+			prefixKey := indexDir.Bytes()
 			if len(prefix) > 0 {
-				prefixKey = append(key, 0x02)
+				prefixKey = append(prefixKey, 0x02)
 				prefixKey = append(prefixKey, prefix...)
-			} else {
-				prefixKey = key
 			}
 			range2, err := fdb.PrefixRange(prefixKey)
 			if err != nil {
 				panic(err)
 			}
-			ri = tr.GetRange(range2, fdb.RangeOptions{}).Iterator()
-		}
+			ri := tr.GetRange(range2, fdb.RangeOptions{}).Iterator()
 
-		for ri.Advance() {
-			kv := ri.MustGet()
-			t, _ := tuple.Unpack(kv.Key)
-			if t[3] != "count" {
-				lengthKey := objectDir.Pack(tuple.Tuple{kv.Value, "len"})
-				lengthValueFuture := tr.Get(lengthKey)
+			for ri.Advance() {
+				kv := ri.MustGet()
+				t, _ := tuple.Unpack(kv.Key)
+				if t[2] != "count" {
+					lengthKey := objectDir.Pack(tuple.Tuple{kv.Value, "len"})
+					lengthValueFuture := tr.Get(lengthKey)
 
-				partialKey := objectDir.Pack(tuple.Tuple{kv.Value, "partial"})
-				partialValueFuture := tr.Get(partialKey)
+					partialKey := objectDir.Pack(tuple.Tuple{kv.Value, "partial"})
+					partialValueFuture := tr.Get(partialKey)
 
-				uploadDateKey := objectDir.Pack(tuple.Tuple{kv.Value, "meta", "uploadDate"})
-				uploadDateFuture := tr.Get(uploadDateKey)
+					uploadDateKey := objectDir.Pack(tuple.Tuple{kv.Value, "meta", "uploadDate"})
+					uploadDateFuture := tr.Get(uploadDateKey)
 
-				_id := bson.ObjectId(kv.Value)
+					_id := bson.ObjectId(kv.Value)
 
-				v, err := tuple.Unpack(lengthValueFuture.MustGet())
-				if err != nil {
-					panic(err)
-				}
-				length := v[0].(int64)
-
-				var partialMark string
-				if partialValueFuture.MustGet() == nil {
-					partialMark = ""
-				} else {
-					partialMark = "*"
-				}
-
-				var uploadDate time.Time
-				uploadDateValue := uploadDateFuture.MustGet()
-				if uploadDateValue != nil {
-					v, err = tuple.Unpack(uploadDateValue)
-					if v == nil || err != nil {
-						uploadDateValue = nil
-					} else {
-						ns := v[0].(int64)
-						uploadDate = time.Unix(ns/1e9, ns%1e9)
+					v, err := tuple.Unpack(lengthValueFuture.MustGet())
+					if err != nil {
+						panic(err)
 					}
+					if v == nil {
+						continue
+					}
+					length := v[0].(int64)
+
+					var partialMark string
+					if partialValueFuture.MustGet() == nil {
+						partialMark = ""
+					} else {
+						partialMark = "*"
+					}
+
+					var uploadDate time.Time
+					uploadDateValue := uploadDateFuture.MustGet()
+					if uploadDateValue != nil {
+						v, err = tuple.Unpack(uploadDateValue)
+						if v == nil || err != nil {
+							uploadDateValue = nil
+						} else {
+							ns := v[0].(int64)
+							uploadDate = time.Unix(ns/1e9, ns%1e9)
+						}
+					}
+					if uploadDateValue == nil {
+						uploadDate = _id.Time()
+					}
+					name := t[1]
+					fmt.Printf("%s %s\t%s %d\t%s%s\n", _id, bucketName1, uploadDate.Format("2006-01-02T15:04:05.000000000-0700"), length, name, partialMark)
 				}
-				if uploadDateValue == nil {
-					uploadDate = _id.Time()
-				}
-				fmt.Printf("%s %s\t%s %d\t%s%s\n", _id, t[1], uploadDate.Format("2006-01-02T15:04:05.000000000-0700"), length, t[2], partialMark)
 			}
 		}
 		return nil, nil
@@ -196,6 +204,7 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 }
 
 func delete(db fdb.Database, bucketName string, names []string, finishChannel chan bool) {
+	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
 		go func(name string) {
 			db.Transact(func(tr fdb.Transaction) (interface{}, error) {
@@ -204,7 +213,7 @@ func delete(db fdb.Database, bucketName string, names []string, finishChannel ch
 					panic(err)
 				}
 
-				countKey := indexDir.Pack(tuple.Tuple{bucketName, name, "count"})
+				countKey := indexDir.Pack(tuple.Tuple{name, "count"})
 				objectCountValueFuture := tr.Get(countKey)
 
 				objectDir, err := directory.Open(tr, objectPath, nil)
@@ -212,20 +221,20 @@ func delete(db fdb.Database, bucketName string, names []string, finishChannel ch
 					panic(err)
 				}
 
-				indexPrefixKey := indexDir.Pack(tuple.Tuple{bucketName, name})
+				indexPrefixKey := indexDir.Pack(tuple.Tuple{name})
 				indexPrefixRange, err := fdb.PrefixRange(indexPrefixKey)
 				if err != nil {
 					panic(err)
 				}
 
-				startKey := indexDir.Pack(tuple.Tuple{bucketName, name, 0})
+				startKey := indexDir.Pack(tuple.Tuple{name, 0})
 				objectCountValue := objectCountValueFuture.MustGet()
 				if objectCountValue == nil {
 					return nil, nil
 				}
 				objectCount := binary.LittleEndian.Uint64(objectCountValue)
 
-				endKey := indexDir.Pack(tuple.Tuple{bucketName, name, int64(objectCount)})
+				endKey := indexDir.Pack(tuple.Tuple{name, int64(objectCount)})
 				keyRange := fdb.KeyRange{
 					Begin: startKey,
 					End:   endKey,
@@ -254,10 +263,6 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 		go func(id string) {
 			idBytes := []byte(bson.ObjectIdHex(id))
 			db.Transact(func(tr fdb.Transaction) (interface{}, error) {
-				indexDir, err := directory.Open(tr, indexDirPath, nil)
-				if err != nil {
-					panic(err)
-				}
 				objectDir, err := directory.Open(tr, objectPath, nil)
 				if err != nil {
 					panic(err)
@@ -268,9 +273,13 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 				ndxFuture := tr.Get(objectDir.Pack(tuple.Tuple{idBytes, "ndx"}))
 
 				bucketName := string(bucketNameFuture.MustGet())
-				name := string(nameFuture.MustGet())
+				indexDir, err := directory.Open(tr, append(nameIndexDirPrefix, bucketName), nil)
+				if err != nil {
+					panic(err)
+				}
 
-				countKey := indexDir.Pack(tuple.Tuple{bucketName, name, "count"})
+				name := string(nameFuture.MustGet())
+				countKey := indexDir.Pack(tuple.Tuple{name, "count"})
 				objectCountFuture := tr.Get(countKey)
 
 				_index, err := tuple.Unpack(ndxFuture.MustGet())
@@ -289,7 +298,7 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 				objectPrefixRange, err := fdb.PrefixRange(objectDir.Pack(tuple.Tuple{idBytes}))
 				tr.ClearRange(objectPrefixRange)
 
-				indexPrefixRange, err := fdb.PrefixRange(indexDir.Pack(tuple.Tuple{bucketName, name, int64(index)}))
+				indexPrefixRange, err := fdb.PrefixRange(indexDir.Pack(tuple.Tuple{name, int64(index)}))
 				tr.ClearRange(indexPrefixRange)
 
 				return nil, nil
@@ -300,6 +309,7 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 }
 
 func get(localName string, db fdb.Database, bucketName string, names []string, allowPartial, verbose bool, finishChannel chan bool) {
+	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
 		go func(name string) {
 			var length int64
@@ -334,14 +344,14 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 						if err != nil {
 							panic(err)
 						}
-						countTuple := tuple.Tuple{bucketName, name, "count"}
+						countTuple := tuple.Tuple{name, "count"}
 						countKey := indexDir.Pack(countTuple)
 						countValue := tr.Get(countKey).MustGet()
 						if countValue == nil {
 							return nil, nil
 						}
 						for count := binary.LittleEndian.Uint64(countValue); ; count-- {
-							nameKey := indexDir.Pack(tuple.Tuple{bucketName, name, int64(count - 1)}) // Uzmi najnoviju datoteku tog imena.
+							nameKey := indexDir.Pack(tuple.Tuple{name, int64(count - 1)}) // Uzmi najnoviju datoteku tog imena.
 							id = tr.Get(nameKey).MustGet()
 							if err != nil {
 								panic(err)
@@ -532,6 +542,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 	default:
 		compressionAlgoValue = tuple.Tuple{compressionAlgorithm}.Pack()
 	}
+	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for name1 := range uniqueNames {
 		go func(name string) {
 			var filename string
@@ -595,7 +606,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 						tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
 
 						indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
-						countTuple := tuple.Tuple{bucketName, filename, "count"}
+						countTuple := tuple.Tuple{filename, "count"}
 						countKey := indexDir.Pack(countTuple)
 						oldCountValue := tr.Get(countKey).MustGet()
 						var oldCount int64
@@ -605,7 +616,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 							oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
 						}
 						tr.Add(countKey, one)
-						tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
+						tr.Set(indexDir.Pack(tuple.Tuple{filename, oldCount}), id)
 						if multipleTransactions {
 							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						}
@@ -691,6 +702,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 	default:
 		compressionAlgoValue = tuple.Tuple{compressionAlgorithm}.Pack()
 	}
+	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for id1 := range uniqueIds {
 		go func(idString string) {
 			id := []byte(bson.ObjectIdHex(idString))
@@ -772,7 +784,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 							tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
 
 							indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
-							countTuple := tuple.Tuple{bucketName, filename, "count"}
+							countTuple := tuple.Tuple{filename, "count"}
 							countKey := indexDir.Pack(countTuple)
 							oldCountValue := tr.Get(countKey).MustGet()
 							var oldCount int64
@@ -782,7 +794,7 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 								oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
 							}
 							tr.Add(countKey, one)
-							tr.Set(indexDir.Pack(tuple.Tuple{bucketName, filename, oldCount}), id)
+							tr.Set(indexDir.Pack(tuple.Tuple{filename, oldCount}), id)
 							tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
 							tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
 							for key, value := range tags {
