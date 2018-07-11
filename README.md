@@ -8,5 +8,5 @@ Manipulate [FoundationDB](https://www.foundationdb.org/) object store using the 
 - Data model suitable for advanced operations like append, partial modification, partial download or moving between buckets
  
 # Limitations
-- Supports objects up to 8192PiB in size
+- Supports objects up to 8192 [PiB](https://en.wikipedia.org/wiki/Pebibyte) in size
 - Cancelling an upload will not result in a total rollback of the upload, but in a partial upload that will be consistent in the database and marked as a partial upload - objects are uploaded in parts using transactions
