@@ -285,14 +285,28 @@ func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
 				_index, err := tuple.Unpack(ndxFuture.MustGet())
 				index := uint64(_index[0].(int64))
 
+				if index+1 == binary.LittleEndian.Uint64(objectCountFuture.MustGet()) {
+					// Need to reduce count so that (count - 1) always points to last used object version.
+					for i := index; ; i++ {
+						previousVersionKey := indexDir.Pack(tuple.Tuple{name, int64(i)})
+						previousVersionFuture := tr.Get(previousVersionKey)
+						if previousVersionFuture.MustGet() != nil {
+							// Found a previous version.
+							bytes := make([]byte, 8)
+							binary.LittleEndian.PutUint64(bytes, i)
+							tr.Set(countKey, bytes)
+							break
+						}
+						if i == 0 {
+							// No other version found.
+							index = 0
+							break
+						}
+					}
+				}
 				if index == 0 {
-					// Last file with this name
+					// No version left.
 					tr.Clear(countKey)
-				} else if index+1 == binary.LittleEndian.Uint64(objectCountFuture.MustGet()) {
-					// Need to reduce count so that (count - 1) always points to last object version.
-					bytes := make([]byte, 8)
-					binary.LittleEndian.PutUint64(bytes, index)
-					tr.Set(countKey, bytes)
 				}
 
 				objectPrefixRange, err := fdb.PrefixRange(objectDir.Pack(tuple.Tuple{idBytes}))
@@ -351,10 +365,15 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 							return nil, nil
 						}
 						for count := binary.LittleEndian.Uint64(countValue); ; count-- {
-							nameKey := indexDir.Pack(tuple.Tuple{name, int64(count - 1)}) // Uzmi najnoviju datoteku tog imena.
-							id = tr.Get(nameKey).MustGet()
-							if err != nil {
-								panic(err)
+							if count == 0 {
+								panic("Non-partial upload not found.")
+							}
+							nameKey := indexDir.Pack(tuple.Tuple{name, int64(count - 1)}) // Use newest version of an object with this name.
+							idFuture := tr.Get(nameKey)
+							id = idFuture.MustGet()
+							if id == nil {
+								// This version doesn't exist.
+								continue
 							}
 							var isValid bool
 							if allowPartial {
@@ -366,16 +385,15 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 							}
 							if isValid {
 								lengthKey := dir.Pack(tuple.Tuple{id, "len"})
-								v, err := tuple.Unpack(tr.Get(lengthKey).MustGet())
+								lengthFuture := tr.Get(lengthKey)
+								lengthValue := lengthFuture.MustGet()
+								v, err := tuple.Unpack(lengthValue)
 								if err != nil {
 									panic(err)
 								}
 								length = v[0].(int64)
 								chunkCount = lengthToChunkCount(length)
 								break
-							}
-							if count == 0 {
-								panic("Non-partial upload not found.")
 							}
 						}
 					}
@@ -895,7 +913,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180710\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180713\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
