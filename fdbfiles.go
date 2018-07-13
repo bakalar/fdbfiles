@@ -104,6 +104,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\tdelete_id\tdelete objects with given ids")
 	fmt.Fprintln(os.Stderr, "\noptions:")
 	fmt.Fprintln(os.Stderr, "\t--all_buckets\t\tshow all FoundationDB object store buckets when using list command")
+	fmt.Fprintln(os.Stderr, "\t--batch\t\t\tuse batch priority which is a lower priority than normal")
 	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB object store bucket to use (default: 'objectstorage1')")
 	fmt.Fprintln(os.Stderr, "\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
 	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
@@ -203,11 +204,14 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 	})
 }
 
-func delete(db fdb.Database, bucketName string, names []string, finishChannel chan bool) {
+func delete(db fdb.Database, batchPriority bool, bucketName string, names []string, finishChannel chan bool) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
 		go func(name string) {
 			db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+				if batchPriority {
+					tr.Options().SetPriorityBatch()
+				}
 				indexDir, err := directory.Open(tr, indexDirPath, nil)
 				if err != nil {
 					panic(err)
@@ -258,11 +262,14 @@ func delete(db fdb.Database, bucketName string, names []string, finishChannel ch
 	}
 }
 
-func deleteID(db fdb.Database, ids []string, finishChannel chan bool) {
+func deleteID(db fdb.Database, batchPriority bool, ids []string, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
 			idBytes := []byte(bson.ObjectIdHex(id))
 			db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+				if batchPriority {
+					tr.Options().SetPriorityBatch()
+				}
 				objectDir, err := directory.Open(tr, objectPath, nil)
 				if err != nil {
 					panic(err)
@@ -551,7 +558,7 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 	}
 }
 
-func put(localName string, db fdb.Database, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
+func put(localName string, db fdb.Database, batchPriority bool, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
 	var compressionAlgoValue []byte = nil
 	switch compressionAlgorithm {
 	case compressionAlgorithmUnset:
@@ -607,6 +614,9 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 			timeStarted := time.Now()
 			for {
 				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+					if batchPriority {
+						tr.Options().SetPriorityBatch()
+					}
 					dir, err := directory.CreateOrOpen(tr, objectPath, nil)
 					if err != nil {
 						panic(err)
@@ -711,7 +721,7 @@ func put(localName string, db fdb.Database, bucketName string, uniqueNames map[s
 	}
 }
 
-func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, resume, verbose bool, finishChannel chan bool) {
+func putID(localName string, db fdb.Database, batchPriority bool, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, resume, verbose bool, finishChannel chan bool) {
 	var compressionAlgoValue []byte = nil
 	switch compressionAlgorithm {
 	case compressionAlgorithmUnset:
@@ -767,6 +777,9 @@ func putID(localName string, db fdb.Database, bucketName string, uniqueIds map[s
 			timeStarted := time.Now()
 			for {
 				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+					if batchPriority {
+						tr.Options().SetPriorityBatch()
+					}
 					dir, err := directory.CreateOrOpen(tr, objectPath, nil)
 					if err != nil {
 						panic(err)
@@ -913,7 +926,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180713\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180716\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
@@ -928,6 +941,7 @@ func main() {
 	var datacenter string
 	var machine string
 	allowPartial := false
+	batchPriority := false
 	for i := 1; i < len(os.Args); i++ {
 		if !strings.HasPrefix(os.Args[i], "-") {
 			cmd = os.Args[i]
@@ -941,6 +955,9 @@ func main() {
 		}
 		if strings.HasPrefix(os.Args[i], "--all_buckets") {
 			allBuckets = true
+		}
+		if strings.HasPrefix(os.Args[i], "--batch") {
+			batchPriority = true
 		}
 		if strings.HasPrefix(os.Args[i], "--bucket=") {
 			bucketName = strings.SplitAfter(os.Args[i], "=")[1]
@@ -1002,7 +1019,7 @@ func main() {
 				uniqueNames[val] = true
 			}
 			finishChannel := make(chan bool)
-			put(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
+			put(localName, db, batchPriority, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
 			}
@@ -1017,7 +1034,7 @@ func main() {
 				uniqueNames[val] = true
 			}
 			finishChannel := make(chan bool)
-			putID(localName, db, bucketName, uniqueNames, tags, compressionAlgorithm, cmd == "resume", verbose, finishChannel)
+			putID(localName, db, batchPriority, bucketName, uniqueNames, tags, compressionAlgorithm, cmd == "resume", verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
 			}
@@ -1050,7 +1067,7 @@ func main() {
 		} else {
 			db = database(clusterFile, datacenter, machine)
 			finishChannel := make(chan bool)
-			delete(db, bucketName, os.Args[argsIndex:], finishChannel)
+			delete(db, batchPriority, bucketName, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
@@ -1061,7 +1078,7 @@ func main() {
 		} else {
 			db = database(clusterFile, datacenter, machine)
 			finishChannel := make(chan bool)
-			deleteID(db, os.Args[argsIndex:], finishChannel)
+			deleteID(db, batchPriority, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
