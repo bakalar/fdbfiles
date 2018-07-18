@@ -196,7 +196,8 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 						uploadDate = _id.Time()
 					}
 					name := t[1]
-					fmt.Printf("%s %s\t%s %d\t%s%s\n", _id, bucketName1, uploadDate.Format("2006-01-02T15:04:05.000000000-0700"), length, name, partialMark)
+					revision := t[2].(int64)
+					fmt.Printf("%s %s\t%d\t%s %d\t%s%s\n", _id, bucketName1, revision, uploadDate.Format("2006-01-02T15:04:05.000000000-0700"), length, name, partialMark)
 				}
 			}
 		}
@@ -926,7 +927,7 @@ func main() {
 		return
 	}
 	if len(os.Args) < 2 || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180716\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180718\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
