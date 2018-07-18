@@ -19,6 +19,7 @@ import (
 const (
 	chunkSize            = 1e5
 	chunksPerTransaction = 99
+	transactionTimeout   = 10000 // ms
 
 	compressionAlgorithmUnset = -1
 	compressionAlgorithmNone  = 0
@@ -118,7 +119,8 @@ func usage() {
 }
 
 func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
-	db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+	_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+		tr.Options().SetTimeout(transactionTimeout)
 		var bucketNames []string
 		var err error
 		if allBuckets {
@@ -203,13 +205,17 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 		}
 		return nil, nil
 	})
+	if e != nil {
+		panic(e)
+	}
 }
 
 func delete(db fdb.Database, batchPriority bool, bucketName string, names []string, finishChannel chan bool) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
 		go func(name string) {
-			db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+			_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+				tr.Options().SetTimeout(transactionTimeout)
 				if batchPriority {
 					tr.Options().SetPriorityBatch()
 				}
@@ -258,6 +264,9 @@ func delete(db fdb.Database, batchPriority bool, bucketName string, names []stri
 
 				return nil, nil
 			})
+			if e != nil {
+				panic(e)
+			}
 			finishChannel <- true
 		}(name1)
 	}
@@ -267,7 +276,8 @@ func deleteID(db fdb.Database, batchPriority bool, ids []string, finishChannel c
 	for _, id1 := range ids {
 		go func(id string) {
 			idBytes := []byte(bson.ObjectIdHex(id))
-			db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+			_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+				tr.Options().SetTimeout(transactionTimeout)
 				if batchPriority {
 					tr.Options().SetPriorityBatch()
 				}
@@ -325,6 +335,9 @@ func deleteID(db fdb.Database, batchPriority bool, ids []string, finishChannel c
 
 				return nil, nil
 			})
+			if e != nil {
+				panic(e)
+			}
 			finishChannel <- true
 		}(id1)
 	}
@@ -356,7 +369,8 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 			}
 			timeStarted := time.Now()
 			for {
-				db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+				_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+					tr.Options().SetTimeout(transactionTimeout)
 					dir, err := directory.Open(tr, objectPath, nil)
 					if err != nil {
 						panic(err)
@@ -449,6 +463,9 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 					}
 					return nil, nil
 				})
+				if e != nil {
+					panic(e)
+				}
 				if chunk == chunkCount {
 					break
 				}
@@ -487,7 +504,8 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 			}
 			timeStarted := time.Now()
 			for {
-				db.ReadTransact(func(tr fdb.ReadTransaction) (interface{}, error) {
+				_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+					tr.Options().SetTimeout(transactionTimeout)
 					dir, err := directory.Open(tr, objectPath, nil)
 					if err != nil {
 						panic(err)
@@ -546,6 +564,9 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 					}
 					return nil, nil
 				})
+				if e != nil {
+					panic(e)
+				}
 				if chunk == chunkCount {
 					break
 				}
@@ -614,7 +635,8 @@ func put(localName string, db fdb.Database, batchPriority bool, bucketName strin
 			}
 			timeStarted := time.Now()
 			for {
-				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+				_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+					tr.Options().SetTimeout(transactionTimeout)
 					if batchPriority {
 						tr.Options().SetPriorityBatch()
 					}
@@ -698,6 +720,9 @@ func put(localName string, db fdb.Database, batchPriority bool, bucketName strin
 					}
 					return nil, nil
 				})
+				if e != nil {
+					panic(e)
+				}
 				if verbose {
 					currentPercent := int(100 * totalWritten / totalSize)
 					if lastPercent < currentPercent {
@@ -777,7 +802,8 @@ func putID(localName string, db fdb.Database, batchPriority bool, bucketName str
 			}
 			timeStarted := time.Now()
 			for {
-				db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+				_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
+					tr.Options().SetTimeout(transactionTimeout)
 					if batchPriority {
 						tr.Options().SetPriorityBatch()
 					}
@@ -882,6 +908,9 @@ func putID(localName string, db fdb.Database, batchPriority bool, bucketName str
 					}
 					return nil, nil
 				})
+				if e != nil {
+					panic(e)
+				}
 				if verbose && !resume {
 					currentPercent := int(100 * totalWritten / totalSize)
 					if lastPercent < currentPercent {
