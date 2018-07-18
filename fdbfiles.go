@@ -107,15 +107,15 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\t--all_buckets\t\tshow all FoundationDB object store buckets when using list command")
 	fmt.Fprintln(os.Stderr, "\t--batch\t\t\tuse batch priority which is a lower priority than normal")
 	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB object store bucket to use (default: 'objectstorage1')")
-	fmt.Fprintln(os.Stderr, "\t--cluster=FILE\t\tuse FoundationDB cluster identified by the provided cluster file")
+	fmt.Fprintln(os.Stderr, "\t--cluster_file=FILE\tuse FoundationDB cluster identified by the provided cluster file")
 	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
-	fmt.Fprintln(os.Stderr, "\t--datacenter=ID\t\tspecify the datacenter ID")
+	fmt.Fprintln(os.Stderr, "\t--datacenter_id=ID\tData center identifier key (up to 16 hex characters)")
 	fmt.Fprintln(os.Stderr, "\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
-	fmt.Fprintln(os.Stderr, "\t--machine=ID\t\tspecify the machine ID")
+	fmt.Fprintln(os.Stderr, "\t--machine_id=ID\t\tMachine identifier key (up to 16 hex characters) - defaults to a random value shared by all fdbserver processes on this machine")
 	fmt.Fprintln(os.Stderr, "\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
 	fmt.Fprintln(os.Stderr, "\t--partial\t\tdon't skip a partially uploaded object when getting")
 	fmt.Fprintln(os.Stderr, "\t--verbose\t\tbe more verbose")
-	fmt.Fprintln(os.Stderr, "\t--version\t\tprint the tool version and exit")
+	fmt.Fprintln(os.Stderr, "\t-v, --version\t\tprint the tool version and exit")
 }
 
 func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
@@ -963,7 +963,7 @@ func main() {
 		usage()
 		return
 	}
-	if len(os.Args) < 2 || os.Args[1] == "--version" {
+	if os.Args[1] == "-v" || os.Args[1] == "--version" {
 		fmt.Printf("%s version 0.20180718\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
@@ -1000,7 +1000,7 @@ func main() {
 		if strings.HasPrefix(os.Args[i], "--bucket=") {
 			bucketName = strings.SplitAfter(os.Args[i], "=")[1]
 		}
-		if strings.HasPrefix(os.Args[i], "--cluster=") {
+		if strings.HasPrefix(os.Args[i], "--cluster_file=") {
 			clusterFile = strings.SplitAfter(os.Args[i], "=")[1]
 		}
 		if strings.HasPrefix(os.Args[i], "--compression=") {
@@ -1017,10 +1017,10 @@ func main() {
 				return
 			}
 		}
-		if strings.HasPrefix(os.Args[i], "--datacenter=") {
+		if strings.HasPrefix(os.Args[i], "--datacenter_id=") {
 			datacenter = strings.SplitAfter(os.Args[i], "=")[1]
 		}
-		if strings.HasPrefix(os.Args[i], "--machine=") {
+		if strings.HasPrefix(os.Args[i], "--machine_id=") {
 			machine = strings.SplitAfter(os.Args[i], "=")[1]
 		}
 		if strings.HasPrefix(os.Args[i], "--metadata=") {
