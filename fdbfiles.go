@@ -935,17 +935,25 @@ func putID(localName string, db fdb.Database, batchPriority bool, bucketName str
 	}
 }
 
-func database(clusterFile string, datacenter string, machine string) fdb.Database {
+func database(clusterFile string, datacenter string, machine string, verbose bool) fdb.Database {
 	fdb.MustAPIVersion(510)
 	if clusterFile == "" {
 		return fdb.MustOpenDefault()
+	} else if verbose {
+		fmt.Fprintf(os.Stderr, "Cluster file = %s\n", clusterFile)
 	}
 	db := fdb.MustOpen(clusterFile, []byte("DB"))
 	if datacenter != "" {
 		db.Options().SetDatacenterId(datacenter)
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Data center identifier key = %s\n", datacenter)
+		}
 	}
 	if machine != "" {
 		db.Options().SetMachineId(machine)
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Machine identifier key = %s\n", machine)
+		}
 	}
 	return db
 }
@@ -1033,7 +1041,7 @@ func main() {
 	var db fdb.Database
 	switch cmd {
 	case "list":
-		db = database(clusterFile, datacenter, machine)
+		db = database(clusterFile, datacenter, machine, verbose)
 		var prefix string
 		if argsIndex >= 0 {
 			prefix = os.Args[argsIndex]
@@ -1043,7 +1051,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile, datacenter, machine)
+			db = database(clusterFile, datacenter, machine, verbose)
 			uniqueNames := make(map[string]bool)
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
@@ -1058,7 +1066,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile, datacenter, machine)
+			db = database(clusterFile, datacenter, machine, verbose)
 			uniqueNames := make(map[string]bool)
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
@@ -1073,7 +1081,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile, datacenter, machine)
+			db = database(clusterFile, datacenter, machine, verbose)
 			finishChannel := make(chan bool)
 			get(localName, db, bucketName, os.Args[argsIndex:], allowPartial, verbose, finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
@@ -1084,7 +1092,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile, datacenter, machine)
+			db = database(clusterFile, datacenter, machine, verbose)
 			finishChannel := make(chan bool)
 			getID(localName, db, os.Args[argsIndex:], verbose, finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
@@ -1095,7 +1103,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile, datacenter, machine)
+			db = database(clusterFile, datacenter, machine, verbose)
 			finishChannel := make(chan bool)
 			delete(db, batchPriority, bucketName, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
@@ -1106,7 +1114,7 @@ func main() {
 		if argsIndex < 0 {
 			usage()
 		} else {
-			db = database(clusterFile, datacenter, machine)
+			db = database(clusterFile, datacenter, machine, verbose)
 			finishChannel := make(chan bool)
 			deleteID(db, batchPriority, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
