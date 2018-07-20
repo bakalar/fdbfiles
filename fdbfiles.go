@@ -378,28 +378,32 @@ func readChunks(chunk, chunkCount int64, idBytes []byte, tr fdb.Transaction, dir
 			chunk = thisChunk
 			if len(key) > 3 /*&& key[3] == "c"*/ {
 				compressionAlgo := kv.Value
-				if compressionAlgo != nil {
+				var usedAlgo int64
+				if len(compressionAlgo) == 0 {
+					usedAlgo = compressionAlgorithmLZ4
+				} else {
 					v, err := tuple.Unpack(compressionAlgo)
 					if err != nil {
 						panic(err)
 					}
 					if v != nil {
-						switch v[0].(int64) {
-						case compressionAlgorithmLZ4:
-							var uncompressedSize int64
-							if chunk+1 == chunkCount {
-								uncompressedSize = leafByteCount
-							} else {
-								uncompressedSize = chunkSize
-							}
-							uncompressed := make([]byte, uncompressedSize)
-							_, err = lz4.DecompressSafe(bytes, uncompressed)
-							if err != nil {
-								panic(err)
-							}
-							bytes = uncompressed
-						}
+						usedAlgo = v[0].(int64)
 					}
+				}
+				switch usedAlgo {
+				case compressionAlgorithmLZ4:
+					var uncompressedSize int64
+					if chunk+1 == chunkCount {
+						uncompressedSize = leafByteCount
+					} else {
+						uncompressedSize = chunkSize
+					}
+					uncompressed := make([]byte, uncompressedSize)
+					_, err = lz4.DecompressSafe(bytes, uncompressed)
+					if err != nil {
+						panic(err)
+					}
+					bytes = uncompressed
 				}
 			} else {
 				if len(bytes) > 0 {
@@ -595,7 +599,7 @@ func put(localName string, db fdb.Database, batchPriority bool, bucketName strin
 	var compressionAlgoValue []byte = nil
 	switch compressionAlgorithm {
 	case compressionAlgorithmUnset:
-		compressionAlgoValue = tuple.Tuple{compressionAlgorithmLZ4}.Pack()
+		compressionAlgoValue = []byte{} // tuple.Tuple{compressionAlgorithmLZ4}.Pack()
 	case compressionAlgorithmNone:
 	default:
 		compressionAlgoValue = tuple.Tuple{compressionAlgorithm}.Pack()
@@ -762,7 +766,7 @@ func putID(localName string, db fdb.Database, batchPriority bool, bucketName str
 	var compressionAlgoValue []byte = nil
 	switch compressionAlgorithm {
 	case compressionAlgorithmUnset:
-		compressionAlgoValue = tuple.Tuple{compressionAlgorithmLZ4}.Pack()
+		compressionAlgoValue = []byte{} // tuple.Tuple{compressionAlgorithmLZ4}.Pack()
 	case compressionAlgorithmNone:
 	default:
 		compressionAlgoValue = tuple.Tuple{compressionAlgorithm}.Pack()
