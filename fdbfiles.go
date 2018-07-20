@@ -109,9 +109,9 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB object store bucket to use (default: 'objectstorage1')")
 	fmt.Fprintln(os.Stderr, "\t--cluster_file=FILE\tuse FoundationDB cluster identified by the provided cluster file")
 	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
-	fmt.Fprintln(os.Stderr, "\t--datacenter_id=ID\tData center identifier key (up to 16 hex characters)")
+	fmt.Fprintln(os.Stderr, "\t--datacenter_id=ID\tdata center identifier key (up to 16 hex characters)")
 	fmt.Fprintln(os.Stderr, "\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
-	fmt.Fprintln(os.Stderr, "\t--machine_id=ID\t\tMachine identifier key (up to 16 hex characters) - defaults to a random value shared by all fdbserver processes on this machine")
+	fmt.Fprintln(os.Stderr, "\t--machine_id=ID\t\tmachine identifier key (up to 16 hex characters) - defaults to a random value shared by all fdbserver processes on this machine")
 	fmt.Fprintln(os.Stderr, "\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
 	fmt.Fprintln(os.Stderr, "\t--partial\t\tdon't skip a partially uploaded object when getting")
 	fmt.Fprintln(os.Stderr, "\t--verbose\t\tbe more verbose")
@@ -343,14 +343,104 @@ func deleteID(db fdb.Database, batchPriority bool, ids []string, finishChannel c
 	}
 }
 
+func uncompressedLeaf(length int64) int64 {
+	uncompressedSize := length % chunkSize
+	if uncompressedSize == 0 {
+		uncompressedSize = chunkSize
+	}
+	return uncompressedSize
+}
+
+func readChunks(chunk, chunkCount int64, idBytes []byte, tr fdb.Transaction, dir directory.DirectorySubspace, leafByteCount int64, print bool, f *os.File) int64 {
+	if chunk < chunkCount {
+		var thisTransactionEndChunkIndex int64
+		if print {
+			thisTransactionEndChunkIndex = chunk + 1
+		} else {
+			thisTransactionEndChunkIndex = chunk + chunksPerTransaction
+		}
+		range2 := fdb.KeyRange{
+			Begin: dir.Pack(tuple.Tuple{idBytes, chunk}),
+			End:   dir.Pack(tuple.Tuple{idBytes, thisTransactionEndChunkIndex}),
+		}
+		ri := tr.GetRange(range2, fdb.RangeOptions{}).Iterator()
+		var bytes []byte
+		for ri.Advance() {
+			kv := ri.MustGet()
+			key, err := tuple.Unpack(kv.Key)
+			if err != nil {
+				panic(err)
+			}
+			thisChunk := key[2].(int64)
+			if chunk+1 != thisChunk && chunk != thisChunk {
+				panic("Invalid chunk.")
+			}
+			chunk = thisChunk
+			if len(key) > 3 /*&& key[3] == "c"*/ {
+				compressionAlgo := kv.Value
+				if compressionAlgo != nil {
+					v, err := tuple.Unpack(compressionAlgo)
+					if err != nil {
+						panic(err)
+					}
+					if v != nil {
+						switch v[0].(int64) {
+						case compressionAlgorithmLZ4:
+							var uncompressedSize int64
+							if chunk+1 == chunkCount {
+								uncompressedSize = leafByteCount
+							} else {
+								uncompressedSize = chunkSize
+							}
+							uncompressed := make([]byte, uncompressedSize)
+							_, err = lz4.DecompressSafe(bytes, uncompressed)
+							if err != nil {
+								panic(err)
+							}
+							bytes = uncompressed
+						}
+					}
+				}
+			} else {
+				if len(bytes) > 0 {
+					if print {
+						fmt.Print(string(bytes))
+					} else {
+						_, err := f.Write(bytes)
+						if err != nil {
+							panic(err)
+						}
+					}
+					bytes = []byte{}
+				}
+				bytes = kv.Value
+			}
+		}
+		if len(bytes) > 0 {
+			if print {
+				fmt.Print(string(bytes))
+			} else {
+				_, err := f.Write(bytes)
+				if err != nil {
+					panic(err)
+				}
+			}
+			bytes = []byte{}
+		}
+		chunk = thisTransactionEndChunkIndex
+	}
+	return chunk
+}
+
 func get(localName string, db fdb.Database, bucketName string, names []string, allowPartial, verbose bool, finishChannel chan bool) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
 		go func(name string) {
 			var length int64
 			var chunkCount int64
+			var leafByteCount int64
 			var f *os.File
-			var id []byte
+			var idBytes []byte
 			print := localName == "-"
 			var chunk int64
 			if !print {
@@ -392,8 +482,8 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 							}
 							nameKey := indexDir.Pack(tuple.Tuple{name, int64(count - 1)}) // Use newest version of an object with this name.
 							idFuture := tr.Get(nameKey)
-							id = idFuture.MustGet()
-							if id == nil {
+							idBytes = idFuture.MustGet()
+							if idBytes == nil {
 								// This version doesn't exist.
 								continue
 							}
@@ -401,12 +491,12 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 							if allowPartial {
 								isValid = true
 							} else {
-								partialKey := dir.Pack(tuple.Tuple{id, "partial"})
+								partialKey := dir.Pack(tuple.Tuple{idBytes, "partial"})
 								partialValueFuture := tr.Get(partialKey)
 								isValid = partialValueFuture.MustGet() == nil
 							}
 							if isValid {
-								lengthKey := dir.Pack(tuple.Tuple{id, "len"})
+								lengthKey := dir.Pack(tuple.Tuple{idBytes, "len"})
 								lengthFuture := tr.Get(lengthKey)
 								lengthValue := lengthFuture.MustGet()
 								v, err := tuple.Unpack(lengthValue)
@@ -415,61 +505,18 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 								}
 								length = v[0].(int64)
 								chunkCount = lengthToChunkCount(length)
+								leafByteCount = uncompressedLeaf(length)
 								break
 							}
 						}
 					}
-					for chunk < chunkCount {
-						key := dir.Pack(tuple.Tuple{id, chunk})
-						bytesFuture := tr.Get(key)
-						compressionKey := dir.Pack(tuple.Tuple{[]byte(id), chunk, "c"})
-						compressionAlgoFuture := tr.Get(compressionKey)
-						bytes := bytesFuture.MustGet()
-
-						compressionAlgo := compressionAlgoFuture.MustGet()
-						if compressionAlgo != nil {
-							v, _ := tuple.Unpack(compressionAlgo)
-							if v != nil {
-								switch v[0].(int64) {
-								case compressionAlgorithmLZ4:
-									var uncompressedSize int64
-									if chunk+1 == chunkCount {
-										uncompressedSize = length % chunkSize
-										if uncompressedSize == 0 {
-											uncompressedSize = chunkSize
-										}
-									} else {
-										uncompressedSize = chunkSize
-									}
-									uncompressed := make([]byte, uncompressedSize)
-									_, err = lz4.DecompressSafe(bytes, uncompressed)
-									if err != nil {
-										panic(err)
-									}
-									bytes = uncompressed
-								}
-							}
-						}
-
-						if print {
-							fmt.Print(string(bytes))
-						} else {
-							_, err := f.Write(bytes)
-							if err != nil {
-								panic(err)
-							}
-						}
-						chunk++
-						if print || chunk%chunksPerTransaction == 0 {
-							break
-						}
-					}
+					chunk = readChunks(chunk, chunkCount, idBytes, tr, dir, leafByteCount, print, f)
 					return nil, nil
 				})
 				if e != nil {
 					panic(e)
 				}
-				if chunk == chunkCount {
+				if chunk >= chunkCount {
 					break
 				}
 			}
@@ -488,6 +535,7 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 			idBytes := []byte(bson.ObjectIdHex(id))
 			var length int64
 			var chunkCount int64
+			var leafByteCount int64
 			var f *os.File
 			print := localName == "-"
 			var chunk int64
@@ -522,58 +570,15 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 						}
 						length = v[0].(int64)
 						chunkCount = lengthToChunkCount(length)
+						leafByteCount = uncompressedLeaf(length)
 					}
-					for chunk < chunkCount {
-						key := dir.Pack(tuple.Tuple{idBytes, chunk})
-						bytesFuture := tr.Get(key)
-						compressionKey := dir.Pack(tuple.Tuple{idBytes, chunk, "c"})
-						compressionAlgoFuture := tr.Get(compressionKey)
-						bytes := bytesFuture.MustGet()
-
-						compressionAlgo := compressionAlgoFuture.MustGet()
-						if compressionAlgo != nil {
-							v, _ := tuple.Unpack(compressionAlgo)
-							if v != nil {
-								switch v[0].(int64) {
-								case compressionAlgorithmLZ4:
-									var uncompressedSize int64
-									if chunk+1 == chunkCount {
-										uncompressedSize = length % chunkSize
-										if uncompressedSize == 0 {
-											uncompressedSize = chunkSize
-										}
-									} else {
-										uncompressedSize = chunkSize
-									}
-									uncompressed := make([]byte, uncompressedSize)
-									_, err = lz4.DecompressSafe(bytes, uncompressed)
-									if err != nil {
-										panic(err)
-									}
-									bytes = uncompressed
-								}
-							}
-						}
-
-						if print {
-							fmt.Print(string(bytes))
-						} else {
-							_, err := f.Write(bytes)
-							if err != nil {
-								panic(err)
-							}
-						}
-						chunk++
-						if print || chunk%chunksPerTransaction == 0 {
-							break
-						}
-					}
+					chunk = readChunks(chunk, chunkCount, idBytes, tr, dir, leafByteCount, print, f)
 					return nil, nil
 				})
 				if e != nil {
 					panic(e)
 				}
-				if chunk == chunkCount {
+				if chunk >= chunkCount {
 					break
 				}
 			}
@@ -882,9 +887,10 @@ func putID(localName string, db fdb.Database, batchPriority bool, bucketName str
 								panic("Failed writing chunk.")
 							}
 							data := contentBuffer[:n]
+							chunkKey := dir.Pack(tuple.Tuple{id, chunk})
 							switch myCompressionAlgorithm {
 							case compressionAlgorithmNone:
-								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
+								tr.Set(chunkKey, data)
 							case compressionAlgorithmLZ4:
 								var compressedByteCount int
 								compressedByteCount, err = lz4.CompressDefault(data, lz4CompressedBytes)
@@ -892,11 +898,11 @@ func putID(localName string, db fdb.Database, batchPriority bool, bucketName str
 									panic(err)
 								}
 								if compressedByteCount < n {
-									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), lz4CompressedBytes[:compressedByteCount])
+									tr.Set(chunkKey, lz4CompressedBytes[:compressedByteCount])
 									tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
 									totalWrittenCompressed += int64(compressedByteCount)
 								} else {
-									tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
+									tr.Set(chunkKey, data)
 									totalWrittenCompressed += int64(n)
 								}
 							}
@@ -970,7 +976,7 @@ func main() {
 		return
 	}
 	if os.Args[1] == "-v" || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180718\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180720\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
