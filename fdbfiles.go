@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"strconv"
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
@@ -19,7 +20,6 @@ import (
 const (
 	chunkSize            = 1e5
 	chunksPerTransaction = 99
-	transactionTimeout   = 10000 // ms
 
 	compressionAlgorithmUnset = -1
 	compressionAlgorithmNone  = 0
@@ -114,11 +114,12 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\t--machine_id=ID\t\tmachine identifier key (up to 16 hex characters) - defaults to a random value shared by all fdbserver processes on this machine")
 	fmt.Fprintln(os.Stderr, "\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
 	fmt.Fprintln(os.Stderr, "\t--partial\t\tdon't skip a partially uploaded object when getting")
+	fmt.Fprintln(os.Stderr,"\t--timeout=MS\t\tuse this transaction timeout in milliseconds - default is 10000ms")
 	fmt.Fprintln(os.Stderr, "\t--verbose\t\tbe more verbose")
 	fmt.Fprintln(os.Stderr, "\t-v, --version\t\tprint the tool version and exit")
 }
 
-func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
+func list(db fdb.Database, transactionTimeout int64, allBuckets bool, bucketName string, prefix string) {
 	_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		tr.Options().SetTimeout(transactionTimeout)
 		var bucketNames []string
@@ -210,7 +211,7 @@ func list(db fdb.Database, allBuckets bool, bucketName string, prefix string) {
 	}
 }
 
-func delete(db fdb.Database, batchPriority bool, bucketName string, names []string, finishChannel chan bool) {
+func delete(db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, names []string, finishChannel chan bool) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
 		go func(name string) {
@@ -272,7 +273,7 @@ func delete(db fdb.Database, batchPriority bool, bucketName string, names []stri
 	}
 }
 
-func deleteID(db fdb.Database, batchPriority bool, ids []string, finishChannel chan bool) {
+func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids []string, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
 			idBytes := []byte(bson.ObjectIdHex(id))
@@ -436,7 +437,7 @@ func readChunks(chunk, chunkCount int64, idBytes []byte, tr fdb.Transaction, dir
 	return chunk
 }
 
-func get(localName string, db fdb.Database, bucketName string, names []string, allowPartial, verbose bool, finishChannel chan bool) {
+func get(localName string, db fdb.Database, transactionTimeout int64, bucketName string, names []string, allowPartial, verbose bool, finishChannel chan bool) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
 		go func(name string) {
@@ -533,7 +534,7 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 	}
 }
 
-func getID(localName string, db fdb.Database, ids []string, verbose bool, finishChannel chan bool) {
+func getID(localName string, db fdb.Database, transactionTimeout int64, ids []string, verbose bool, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
 			idBytes := []byte(bson.ObjectIdHex(id))
@@ -595,7 +596,7 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 	}
 }
 
-func put(localName string, db fdb.Database, batchPriority bool, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
+func put(localName string, db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
 	var compressionAlgoValue []byte = nil
 	switch compressionAlgorithm {
 	case compressionAlgorithmUnset:
@@ -762,7 +763,7 @@ func put(localName string, db fdb.Database, batchPriority bool, bucketName strin
 	}
 }
 
-func putID(localName string, db fdb.Database, batchPriority bool, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, resume, verbose bool, finishChannel chan bool) {
+func putID(localName string, db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, resume, verbose bool, finishChannel chan bool) {
 	var compressionAlgoValue []byte = nil
 	switch compressionAlgorithm {
 	case compressionAlgorithmUnset:
@@ -996,6 +997,7 @@ func main() {
 	var machine string
 	allowPartial := false
 	batchPriority := false
+	var transactionTimeout int64 = 10000 // ms
 	for i := 1; i < len(os.Args); i++ {
 		if !strings.HasPrefix(os.Args[i], "-") {
 			cmd = os.Args[i]
@@ -1050,6 +1052,13 @@ func main() {
 		if strings.HasPrefix(os.Args[i], "--partial") {
 			allowPartial = true
 		}
+		if strings.HasPrefix(os.Args[i], "--timeout=") {
+			ms, err := strconv.Atoi(strings.SplitAfter(os.Args[i], "=")[1])
+			if err != nil {
+				panic(err)
+			}
+			transactionTimeout = int64(ms)
+		}
 		if strings.HasPrefix(os.Args[i], "--verbose") {
 			verbose = true
 		}
@@ -1062,7 +1071,7 @@ func main() {
 		if argsIndex >= 0 {
 			prefix = os.Args[argsIndex]
 		}
-		list(db, allBuckets, bucketName, prefix)
+		list(db, transactionTimeout, allBuckets, bucketName, prefix)
 	case "put":
 		if argsIndex < 0 {
 			usage()
@@ -1073,7 +1082,7 @@ func main() {
 				uniqueNames[val] = true
 			}
 			finishChannel := make(chan bool)
-			put(localName, db, batchPriority, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
+			put(localName, db, transactionTimeout, batchPriority, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
 			}
@@ -1088,7 +1097,7 @@ func main() {
 				uniqueNames[val] = true
 			}
 			finishChannel := make(chan bool)
-			putID(localName, db, batchPriority, bucketName, uniqueNames, tags, compressionAlgorithm, cmd == "resume", verbose, finishChannel)
+			putID(localName, db, transactionTimeout, batchPriority, bucketName, uniqueNames, tags, compressionAlgorithm, cmd == "resume", verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
 			}
@@ -1099,7 +1108,7 @@ func main() {
 		} else {
 			db = database(clusterFile, datacenter, machine, verbose)
 			finishChannel := make(chan bool)
-			get(localName, db, bucketName, os.Args[argsIndex:], allowPartial, verbose, finishChannel)
+			get(localName, db, transactionTimeout, bucketName, os.Args[argsIndex:], allowPartial, verbose, finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
@@ -1110,7 +1119,7 @@ func main() {
 		} else {
 			db = database(clusterFile, datacenter, machine, verbose)
 			finishChannel := make(chan bool)
-			getID(localName, db, os.Args[argsIndex:], verbose, finishChannel)
+			getID(localName, db, transactionTimeout, os.Args[argsIndex:], verbose, finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
@@ -1121,7 +1130,7 @@ func main() {
 		} else {
 			db = database(clusterFile, datacenter, machine, verbose)
 			finishChannel := make(chan bool)
-			delete(db, batchPriority, bucketName, os.Args[argsIndex:], finishChannel)
+			delete(db, transactionTimeout, batchPriority, bucketName, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
@@ -1132,7 +1141,7 @@ func main() {
 		} else {
 			db = database(clusterFile, datacenter, machine, verbose)
 			finishChannel := make(chan bool)
-			deleteID(db, batchPriority, os.Args[argsIndex:], finishChannel)
+			deleteID(db, transactionTimeout, batchPriority, os.Args[argsIndex:], finishChannel)
 			for index := argsIndex; index < len(os.Args); index++ {
 				<-finishChannel
 			}
