@@ -435,6 +435,9 @@ func get(localName string, db fdb.Database, bucketName string, names []string, a
 									var uncompressedSize int64
 									if chunk+1 == chunkCount {
 										uncompressedSize = length % chunkSize
+										if uncompressedSize == 0 {
+											uncompressedSize = chunkSize
+										}
 									} else {
 										uncompressedSize = chunkSize
 									}
@@ -536,6 +539,9 @@ func getID(localName string, db fdb.Database, ids []string, verbose bool, finish
 									var uncompressedSize int64
 									if chunk+1 == chunkCount {
 										uncompressedSize = length % chunkSize
+										if uncompressedSize == 0 {
+											uncompressedSize = chunkSize
+										}
 									} else {
 										uncompressedSize = chunkSize
 									}
