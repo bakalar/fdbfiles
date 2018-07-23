@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
@@ -69,6 +69,7 @@ func doCompress(filename string) bool {
 		".ppsx",
 		".ppsm",
 		".rar",
+		".tbz2",
 		".tgz",
 		".txz",
 		".xlsx",
@@ -114,7 +115,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\t--machine_id=ID\t\tmachine identifier key (up to 16 hex characters) - defaults to a random value shared by all fdbserver processes on this machine")
 	fmt.Fprintln(os.Stderr, "\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
 	fmt.Fprintln(os.Stderr, "\t--partial\t\tdon't skip a partially uploaded object when getting")
-	fmt.Fprintln(os.Stderr,"\t--timeout=MS\t\tuse this transaction timeout in milliseconds - default is 10000ms")
+	fmt.Fprintln(os.Stderr, "\t--timeout=MS\t\tuse this transaction timeout in milliseconds - default is 10000ms")
 	fmt.Fprintln(os.Stderr, "\t--verbose\t\tbe more verbose")
 	fmt.Fprintln(os.Stderr, "\t-v, --version\t\tprint the tool version and exit")
 }
@@ -132,12 +133,12 @@ func list(db fdb.Database, transactionTimeout int64, allBuckets bool, bucketName
 		} else {
 			bucketNames = []string{bucketName}
 		}
+		objectDir, err := directory.Open(tr, objectPath, nil)
+		if err != nil {
+			panic(err)
+		}
 		for _, bucketName1 := range bucketNames {
 			indexDir, err := directory.Open(tr, append(nameIndexDirPrefix, bucketName1), nil)
-			if err != nil {
-				panic(err)
-			}
-			objectDir, err := directory.Open(tr, objectPath, nil)
 			if err != nil {
 				panic(err)
 			}
@@ -344,7 +345,7 @@ func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids
 	}
 }
 
-func uncompressedLeaf(length int64) int64 {
+func uncompressedTail(length int64) int64 {
 	uncompressedSize := length % chunkSize
 	if uncompressedSize == 0 {
 		uncompressedSize = chunkSize
@@ -352,7 +353,7 @@ func uncompressedLeaf(length int64) int64 {
 	return uncompressedSize
 }
 
-func readChunks(chunk, chunkCount int64, idBytes []byte, tr fdb.Transaction, dir directory.DirectorySubspace, leafByteCount int64, print bool, f *os.File) int64 {
+func readChunks(chunk, chunkCount int64, idBytes []byte, tr fdb.Transaction, dir directory.DirectorySubspace, tailByteCount int64, print bool, f *os.File) int64 {
 	if chunk < chunkCount {
 		var thisTransactionEndChunkIndex int64
 		if print {
@@ -395,7 +396,7 @@ func readChunks(chunk, chunkCount int64, idBytes []byte, tr fdb.Transaction, dir
 				case compressionAlgorithmLZ4:
 					var uncompressedSize int64
 					if chunk+1 == chunkCount {
-						uncompressedSize = leafByteCount
+						uncompressedSize = tailByteCount
 					} else {
 						uncompressedSize = chunkSize
 					}
@@ -443,7 +444,7 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 		go func(name string) {
 			var length int64
 			var chunkCount int64
-			var leafByteCount int64
+			var tailByteCount int64
 			var f *os.File
 			var idBytes []byte
 			print := localName == "-"
@@ -510,12 +511,12 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 								}
 								length = v[0].(int64)
 								chunkCount = lengthToChunkCount(length)
-								leafByteCount = uncompressedLeaf(length)
+								tailByteCount = uncompressedTail(length)
 								break
 							}
 						}
 					}
-					chunk = readChunks(chunk, chunkCount, idBytes, tr, dir, leafByteCount, print, f)
+					chunk = readChunks(chunk, chunkCount, idBytes, tr, dir, tailByteCount, print, f)
 					return nil, nil
 				})
 				if e != nil {
@@ -540,7 +541,7 @@ func getID(localName string, db fdb.Database, transactionTimeout int64, ids []st
 			idBytes := []byte(bson.ObjectIdHex(id))
 			var length int64
 			var chunkCount int64
-			var leafByteCount int64
+			var tailByteCount int64
 			var f *os.File
 			print := localName == "-"
 			var chunk int64
@@ -575,9 +576,9 @@ func getID(localName string, db fdb.Database, transactionTimeout int64, ids []st
 						}
 						length = v[0].(int64)
 						chunkCount = lengthToChunkCount(length)
-						leafByteCount = uncompressedLeaf(length)
+						tailByteCount = uncompressedTail(length)
 					}
-					chunk = readChunks(chunk, chunkCount, idBytes, tr, dir, leafByteCount, print, f)
+					chunk = readChunks(chunk, chunkCount, idBytes, tr, dir, tailByteCount, print, f)
 					return nil, nil
 				})
 				if e != nil {
@@ -981,7 +982,7 @@ func main() {
 		return
 	}
 	if os.Args[1] == "-v" || os.Args[1] == "--version" {
-		fmt.Printf("%s version 0.20180720\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 0.20180723\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
