@@ -101,7 +101,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\tput_id\t\tadd objects with given ids")
 	fmt.Fprintln(os.Stderr, "\tget\t\tget objects with given names")
 	fmt.Fprintln(os.Stderr, "\tget_id\t\tget objects with given ids")
-	fmt.Fprintln(os.Stderr, "\tresume\t\tresume getting objects with given ids")
+	fmt.Fprintln(os.Stderr, "\tresume\t\tresume adding objects with given ids - useful to continue a partial upload")
 	fmt.Fprintln(os.Stderr, "\tdelete\t\tdelete all objects with given names")
 	fmt.Fprintln(os.Stderr, "\tdelete_id\tdelete objects with given ids")
 	fmt.Fprintln(os.Stderr, "\noptions:")
