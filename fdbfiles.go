@@ -462,7 +462,7 @@ func readChunks(chunk, chunkCount int64, idWithPrefix []byte, tr fdb.Transaction
 	return chunk
 }
 
-func get(localName string, db fdb.Database, transactionTimeout int64, bucketName string, names []string, allowPartial, verbose bool, finishChannel chan bool) {
+func get(localName string, db fdb.Database, transactionTimeout int64, bucketName string, names []string, allowPartial, verbose bool, finishChannel chan int64) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
 		go func(name string) {
@@ -555,7 +555,7 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 				elapsed := time.Since(timeStarted)
 				fmt.Fprintf(os.Stderr, "Downloaded %s (%.2fMB/s).\n", name, float64(length)/1e6/elapsed.Seconds())
 			}
-			finishChannel <- true
+			finishChannel <- length
 		}(name1)
 	}
 }
@@ -622,7 +622,7 @@ func getID(localName string, db fdb.Database, transactionTimeout int64, ids []st
 	}
 }
 
-func put(localName string, db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan bool) {
+func put(localName string, db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan int64) {
 	var compressionAlgoValue []byte = nil
 	switch compressionAlgorithm {
 	case compressionAlgorithmUnset:
@@ -787,7 +787,7 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 					break
 				}
 			}
-			finishChannel <- true
+			finishChannel <- totalWritten
 		}(name1)
 	}
 }
@@ -1110,10 +1110,16 @@ func main() {
 			for _, val := range os.Args[argsIndex:] {
 				uniqueNames[val] = true
 			}
-			finishChannel := make(chan bool)
+			finishChannel := make(chan int64)
+			timeStarted := time.Now()
 			put(localName, db, transactionTimeout, batchPriority, bucketName, uniqueNames, tags, compressionAlgorithm, verbose, finishChannel)
+			var totalBytes int64
 			for range uniqueNames {
-				<-finishChannel
+				totalBytes += <-finishChannel
+			}
+			if verbose {
+				elapsed := time.Since(timeStarted)
+				fmt.Fprintf(os.Stderr, "\nUploaded %d bytes in %d files (%.2fMB/s).\n", totalBytes, len(uniqueNames), float64(totalBytes)/1e6/elapsed.Seconds())
 			}
 		}
 	case "put_id", "resume":
@@ -1136,10 +1142,16 @@ func main() {
 			usage()
 		} else {
 			db = database(clusterFile, datacenter, machine, verbose)
-			finishChannel := make(chan bool)
+			finishChannel := make(chan int64)
+			timeStarted := time.Now()
 			get(localName, db, transactionTimeout, bucketName, os.Args[argsIndex:], allowPartial, verbose, finishChannel)
+			var totalBytes int64
 			for index := argsIndex; index < len(os.Args); index++ {
-				<-finishChannel
+				totalBytes += <-finishChannel
+			}
+			if verbose {
+				elapsed := time.Since(timeStarted)
+				fmt.Fprintf(os.Stderr, "\nDownloaded %d bytes in %d files (%.2fMB/s).\n", totalBytes, len(os.Args[argsIndex:]), float64(totalBytes)/1e6/elapsed.Seconds())
 			}
 		}
 	case "get_id":
