@@ -63,6 +63,26 @@ func idWithLoadBalancingPrefix(id bson.ObjectId) []byte {
 	return bytes
 }
 
+func percentFromWrittenAndSize(written, size int64) int {
+	var percent int
+	if size > 0 {
+		percent = int(100 * written / size)
+	} else {
+		percent = 100
+	}
+	return percent
+}
+
+func ratioFromWrittenAndCompressed(written, compressed int64) float64 {
+	var ratio float64
+	if compressed > 0 {
+		ratio = float64(written) / float64(compressed)
+	} else {
+		ratio = 1
+	}
+	return ratio
+}
+
 func doCompress(filename string) bool {
 	switch strings.ToLower(filepath.Ext(filename)) {
 	case
@@ -766,16 +786,10 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 					panic(e)
 				}
 				if verbose {
-					currentPercent := int(100 * totalWritten / totalSize)
+					currentPercent := percentFromWrittenAndSize(totalWritten, totalSize)
 					if lastPercent < currentPercent {
-						fTotalWritten := float64(totalWritten)
-						var compressed float64
-						if totalWrittenCompressed == 0 {
-							compressed = fTotalWritten
-						} else {
-							compressed = float64(totalWrittenCompressed)
-						}
-						fmt.Fprintf(os.Stderr, "Uploaded %d%% of %s (compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/compressed)
+						ratio := ratioFromWrittenAndCompressed(totalWritten, totalWrittenCompressed)
+						fmt.Fprintf(os.Stderr, "Uploaded %d%% of %s (compression ratio = %.2f).\n", currentPercent, filename, ratio)
 						lastPercent = currentPercent
 					}
 				}
@@ -954,17 +968,11 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 					panic(e)
 				}
 				if verbose && !resume {
-					currentPercent := int(100 * totalWritten / totalSize)
+					currentPercent := percentFromWrittenAndSize(totalWritten, totalSize)
 					if lastPercent < currentPercent {
 						elapsed := time.Since(timeStarted)
-						fTotalWritten := float64(totalWritten)
-						var compressed float64
-						if totalWrittenCompressed == 0 {
-							compressed = fTotalWritten
-						} else {
-							compressed = float64(totalWrittenCompressed)
-						}
-						fmt.Fprintf(os.Stderr, "Uploaded %d%% of %s (%.2fMB/s; compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/compressed)
+						ratio := ratioFromWrittenAndCompressed(totalWritten, totalWrittenCompressed)
+						fmt.Fprintf(os.Stderr, "Uploaded %d%% of %s (%.2fMB/s; compression ratio = %.2f).\n", currentPercent, filename, float64(totalWritten)/1e6/elapsed.Seconds(), ratio)
 						lastPercent = currentPercent
 					}
 				}
