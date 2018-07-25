@@ -487,7 +487,6 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 				}
 				defer f.Close()
 			}
-			timeStarted := time.Now()
 			for {
 				_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 					tr.Options().SetTimeout(transactionTimeout)
@@ -552,8 +551,7 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 				}
 			}
 			if verbose {
-				elapsed := time.Since(timeStarted)
-				fmt.Fprintf(os.Stderr, "Downloaded %s (%.2fMB/s).\n", name, float64(length)/1e6/elapsed.Seconds())
+				fmt.Fprintf(os.Stderr, "Downloaded %s.\n", name)
 			}
 			finishChannel <- length
 		}(name1)
@@ -677,7 +675,6 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 			if verbose {
 				fmt.Fprintf(os.Stderr, "Uploading %s...\n", filename)
 			}
-			timeStarted := time.Now()
 			for {
 				_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 					tr.Options().SetTimeout(transactionTimeout)
@@ -771,7 +768,6 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 				if verbose {
 					currentPercent := int(100 * totalWritten / totalSize)
 					if lastPercent < currentPercent {
-						elapsed := time.Since(timeStarted)
 						fTotalWritten := float64(totalWritten)
 						var compressed float64
 						if totalWrittenCompressed == 0 {
@@ -779,7 +775,7 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 						} else {
 							compressed = float64(totalWrittenCompressed)
 						}
-						fmt.Fprintf(os.Stderr, "Uploaded %d%% of %s (%.2fMB/s; compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/1e6/elapsed.Seconds(), fTotalWritten/compressed)
+						fmt.Fprintf(os.Stderr, "Uploaded %d%% of %s (compression ratio = %.2f).\n", currentPercent, filename, fTotalWritten/compressed)
 						lastPercent = currentPercent
 					}
 				}
