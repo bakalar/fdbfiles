@@ -369,15 +369,15 @@ func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids
 	}
 }
 
-func uncompressedTail(length int64) int64 {
-	uncompressedSize := length % chunkSize
+func uncompressedTail(length int64) int {
+	uncompressedSize := int(length % chunkSize)
 	if uncompressedSize == 0 {
 		uncompressedSize = chunkSize
 	}
 	return uncompressedSize
 }
 
-func readChunks(chunk, chunkCount int64, idWithPrefix []byte, tr fdb.Transaction, dir directory.DirectorySubspace, tailByteCount int64, print bool, f *os.File) int64 {
+func readChunks(chunk, chunkCount int64, idWithPrefix []byte, tr fdb.Transaction, dir directory.DirectorySubspace, tailByteCount int, print bool, f *os.File) int64 {
 	if chunk < chunkCount {
 		var thisTransactionEndChunkIndex int64
 		if print {
@@ -418,14 +418,14 @@ func readChunks(chunk, chunkCount int64, idWithPrefix []byte, tr fdb.Transaction
 				}
 				switch usedAlgo {
 				case compressionAlgorithmLZ4:
-					var uncompressedSize int64
+					var uncompressedSize int
 					if chunk+1 == chunkCount {
 						uncompressedSize = tailByteCount
 					} else {
 						uncompressedSize = chunkSize
 					}
 					uncompressed := make([]byte, uncompressedSize)
-					_, err = lz4.DecompressSafe(bytes, uncompressed)
+					_, err = lz4.DecompressFast(bytes, uncompressed, uncompressedSize)
 					if err != nil {
 						panic(err)
 					}
@@ -468,7 +468,7 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 		go func(name string) {
 			var length int64
 			var chunkCount int64
-			var tailByteCount int64
+			var tailByteCount int
 			var f *os.File
 			var idWithPrefix []byte
 			print := localName == "-"
@@ -566,7 +566,7 @@ func getID(localName string, db fdb.Database, transactionTimeout int64, ids []st
 			idWithPrefix := idWithLoadBalancingPrefix(bson.ObjectIdHex(id))
 			var length int64
 			var chunkCount int64
-			var tailByteCount int64
+			var tailByteCount int
 			var f *os.File
 			print := localName == "-"
 			var chunk int64
@@ -1010,7 +1010,7 @@ func main() {
 		return
 	}
 	if os.Args[1] == "-v" || os.Args[1] == "--version" {
-		fmt.Printf("%s version 1.20180724\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 1.20180725\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
