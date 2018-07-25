@@ -475,7 +475,7 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 			var chunk int64
 			if !print {
 				var path string
-				if len(names) == 1 && len(localName) > 0 {
+				if localName == "/dev/null" || (len(names) == 1 && len(localName) > 0) {
 					path = localName
 				} else {
 					path = name
