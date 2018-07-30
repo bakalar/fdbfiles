@@ -1014,7 +1014,7 @@ func main() {
 		return
 	}
 	if os.Args[1] == "-v" || os.Args[1] == "--version" {
-		fmt.Printf("%s version 1.20180725\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 1.20180730\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
@@ -1123,7 +1123,12 @@ func main() {
 			}
 			if verbose {
 				elapsed := time.Since(timeStarted)
-				fmt.Fprintf(os.Stderr, "\nUploaded %d bytes in %d files (%.2fMB/s).\n", totalBytes, len(uniqueNames), float64(totalBytes)/1e6/elapsed.Seconds())
+				var manySuffix string
+				count := len(uniqueNames)
+				if count > 1 {
+					manySuffix = "s"
+				}
+				fmt.Fprintf(os.Stderr, "\nUploaded %d bytes in %d file%s (%.2fMB/s).\n", totalBytes, count, manySuffix, float64(totalBytes)/1e6/elapsed.Seconds())
 			}
 		}
 	case "put_id", "resume":
@@ -1155,7 +1160,12 @@ func main() {
 			}
 			if verbose {
 				elapsed := time.Since(timeStarted)
-				fmt.Fprintf(os.Stderr, "\nDownloaded %d bytes in %d files (%.2fMB/s).\n", totalBytes, len(os.Args[argsIndex:]), float64(totalBytes)/1e6/elapsed.Seconds())
+				var manySuffix string
+				count := len(os.Args[argsIndex:])
+				if count > 1 {
+					manySuffix = "s"
+				}
+				fmt.Fprintf(os.Stderr, "\nDownloaded %d bytes in %d file%s (%.2fMB/s).\n", totalBytes, count, manySuffix, float64(totalBytes)/1e6/elapsed.Seconds())
 			}
 		}
 	case "get_id":
