@@ -21,9 +21,9 @@ const (
 	chunkSize            = 1e5
 	chunksPerTransaction = 99
 
-	compressionAlgorithmUnset = -1
-	compressionAlgorithmNone  = 0
-	compressionAlgorithmLZ4   = 1
+	compressionAlgorithmAuto = -1
+	compressionAlgorithmNone = 0
+	compressionAlgorithmLZ4  = 1
 )
 
 var (
@@ -151,7 +151,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\t--batch\t\t\tuse batch priority which is a lower priority than normal")
 	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB object store bucket to use (default: 'objectstorage1')")
 	fmt.Fprintln(os.Stderr, "\t--cluster_file=FILE\tuse FoundationDB cluster identified by the provided cluster file")
-	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'none' or 'lz4' (default)")
+	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'auto' (default), 'none' or 'lz4'")
 	fmt.Fprintln(os.Stderr, "\t--datacenter_id=ID\tdata center identifier key (up to 16 hex characters)")
 	fmt.Fprintln(os.Stderr, "\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
 	fmt.Fprintln(os.Stderr, "\t--machine_id=ID\t\tmachine identifier key (up to 16 hex characters) - defaults to a random value shared by all fdbserver processes on this machine")
@@ -641,14 +641,6 @@ func getID(localName string, db fdb.Database, transactionTimeout int64, ids []st
 }
 
 func put(localName string, db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan int64) {
-	var compressionAlgoValue []byte = nil
-	switch compressionAlgorithm {
-	case compressionAlgorithmUnset:
-		compressionAlgoValue = []byte{} // tuple.Tuple{compressionAlgorithmLZ4}.Pack()
-	case compressionAlgorithmNone:
-	default:
-		compressionAlgoValue = tuple.Tuple{compressionAlgorithm}.Pack()
-	}
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for name1 := range uniqueNames {
 		go func(name string) {
@@ -680,7 +672,7 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 			var lastPercent int
 			var lz4CompressedBytes []byte
 			var myCompressionAlgorithm int
-			if compressionAlgorithm == compressionAlgorithmUnset {
+			if compressionAlgorithm == compressionAlgorithmAuto {
 				if doCompress(filename) {
 					myCompressionAlgorithm = compressionAlgorithmLZ4
 				} else {
@@ -689,6 +681,7 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 			} else {
 				myCompressionAlgorithm = compressionAlgorithm
 			}
+			compressionAlgoValue := compressionAlgoValue(myCompressionAlgorithm)
 			if myCompressionAlgorithm == compressionAlgorithmLZ4 {
 				lz4CompressedBytes = make([]byte, lz4.CompressBound(chunkSize))
 			}
@@ -802,15 +795,19 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 	}
 }
 
-func putID(localName string, db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, resume, verbose bool, finishChannel chan bool) {
-	var compressionAlgoValue []byte = nil
+func compressionAlgoValue(compressionAlgorithm int) []byte {
+	var v []byte
 	switch compressionAlgorithm {
-	case compressionAlgorithmUnset:
-		compressionAlgoValue = []byte{} // tuple.Tuple{compressionAlgorithmLZ4}.Pack()
+	case compressionAlgorithmLZ4:
+		v = []byte{}
 	case compressionAlgorithmNone:
 	default:
-		compressionAlgoValue = tuple.Tuple{compressionAlgorithm}.Pack()
+		v = tuple.Tuple{compressionAlgorithm}.Pack()
 	}
+	return v
+}
+
+func putID(localName string, db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, resume, verbose bool, finishChannel chan bool) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for id1 := range uniqueIds {
 		go func(idString string) {
@@ -840,7 +837,7 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 			var lastPercent int
 			var lz4CompressedBytes []byte
 			var myCompressionAlgorithm int
-			if compressionAlgorithm == compressionAlgorithmUnset {
+			if compressionAlgorithm == compressionAlgorithmAuto {
 				if doCompress(filename) {
 					myCompressionAlgorithm = compressionAlgorithmLZ4
 				} else {
@@ -849,6 +846,7 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 			} else {
 				myCompressionAlgorithm = compressionAlgorithm
 			}
+			compressionAlgoValue := compressionAlgoValue(myCompressionAlgorithm)
 			if myCompressionAlgorithm == compressionAlgorithmLZ4 {
 				lz4CompressedBytes = make([]byte, lz4.CompressBound(chunkSize))
 			}
@@ -1014,7 +1012,7 @@ func main() {
 		return
 	}
 	if os.Args[1] == "-v" || os.Args[1] == "--version" {
-		fmt.Printf("%s version 1.20180730\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
+		fmt.Printf("%s version 1.20180829\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
 	verbose := false
@@ -1024,7 +1022,7 @@ func main() {
 	allBuckets := false
 	var clusterFile string
 	var tags map[string]string
-	compressionAlgorithm := compressionAlgorithmUnset
+	compressionAlgorithm := compressionAlgorithmAuto
 	var argsIndex int
 	var datacenter string
 	var machine string
