@@ -351,7 +351,7 @@ func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids
 
 				if index+1 == binary.LittleEndian.Uint64(objectCountFuture.MustGet()) {
 					// Need to reduce count so that (count - 1) always points to last used object version.
-					for i := index; ; i++ {
+					for i := index - 1;; i-- {
 						previousVersionKey := indexDir.Pack(tuple.Tuple{name, int64(i)})
 						previousVersionFuture := tr.Get(previousVersionKey)
 						if previousVersionFuture.MustGet() != nil {
