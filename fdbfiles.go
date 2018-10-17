@@ -348,8 +348,9 @@ func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids
 
 				_index, err := tuple.Unpack(ndxFuture.MustGet())
 				index := uint64(_index[0].(int64))
+				firstUnusedIndex := binary.LittleEndian.Uint64(objectCountFuture.MustGet())
 
-				if index+1 == binary.LittleEndian.Uint64(objectCountFuture.MustGet()) {
+				if index+1 == firstUnusedIndex {
 					// Need to reduce count so that (count - 1) always points to last used object version.
 					for i := index - 1;; i-- {
 						previousVersionKey := indexDir.Pack(tuple.Tuple{name, int64(i)})
@@ -357,18 +358,18 @@ func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids
 						if previousVersionFuture.MustGet() != nil {
 							// Found a previous version.
 							bytes := make([]byte, 8)
-							binary.LittleEndian.PutUint64(bytes, i)
+							binary.LittleEndian.PutUint64(bytes, i + 1)
 							tr.Set(countKey, bytes)
 							break
 						}
 						if i == 0 {
 							// No other version found.
-							index = 0
+							firstUnusedIndex = 0
 							break
 						}
 					}
 				}
-				if index == 0 {
+				if firstUnusedIndex == 0 {
 					// No version left.
 					tr.Clear(countKey)
 				}
