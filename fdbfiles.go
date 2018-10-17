@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -269,9 +270,6 @@ func delete(db fdb.Database, transactionTimeout int64, batchPriority bool, bucke
 					panic(err)
 				}
 
-				countKey := indexDir.Pack(tuple.Tuple{name, "count"})
-				objectCountValueFuture := tr.Get(countKey)
-
 				objectDir, err := directory.Open(tr, objectPath, nil)
 				if err != nil {
 					panic(err)
@@ -284,13 +282,7 @@ func delete(db fdb.Database, transactionTimeout int64, batchPriority bool, bucke
 				}
 
 				startKey := indexDir.Pack(tuple.Tuple{name, 0})
-				objectCountValue := objectCountValueFuture.MustGet()
-				if objectCountValue == nil {
-					return nil, nil
-				}
-				objectCount := binary.LittleEndian.Uint64(objectCountValue)
-
-				endKey := indexDir.Pack(tuple.Tuple{name, int64(objectCount)})
+				endKey := indexDir.Pack(tuple.Tuple{name, math.MaxInt64})
 				keyRange := fdb.KeyRange{
 					Begin: startKey,
 					End:   endKey,
@@ -352,13 +344,13 @@ func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids
 
 				if index+1 == firstUnusedIndex {
 					// Need to reduce count so that (count - 1) always points to last used object version.
-					for i := index - 1;; i-- {
+					for i := index - 1; ; i-- {
 						previousVersionKey := indexDir.Pack(tuple.Tuple{name, int64(i)})
 						previousVersionFuture := tr.Get(previousVersionKey)
 						if previousVersionFuture.MustGet() != nil {
 							// Found a previous version.
 							bytes := make([]byte, 8)
-							binary.LittleEndian.PutUint64(bytes, i + 1)
+							binary.LittleEndian.PutUint64(bytes, i+1)
 							tr.Set(countKey, bytes)
 							break
 						}
