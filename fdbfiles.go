@@ -57,6 +57,7 @@ func loadBalancingPrefix(id bson.ObjectId) byte {
 	return b
 }
 
+// Takes ObjectId as input and adds one byte prefix befure returning
 func idWithLoadBalancingPrefix(id bson.ObjectId) []byte {
 	bytes := make([]byte, 13)
 	bytes[0] = loadBalancingPrefix(id)
@@ -74,6 +75,7 @@ func percentFromWrittenAndSize(written, size int64) int {
 	return percent
 }
 
+// Calculate compression ratio
 func ratioFromWrittenAndCompressed(written, compressed int64) float64 {
 	var ratio float64
 	if compressed > 0 {
@@ -84,6 +86,7 @@ func ratioFromWrittenAndCompressed(written, compressed int64) float64 {
 	return ratio
 }
 
+// Is filename a type of file that can be compressed?
 func doCompress(filename string) bool {
 	switch strings.ToLower(filepath.Ext(filename)) {
 	case
@@ -135,6 +138,7 @@ func doCompress(filename string) bool {
 	}
 }
 
+// Print usage information
 func usage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s [OPTION]... [COMMAND [NAME_OR_ID...]]\n\n", os.Args[0])
 	fmt.Fprintln(os.Stderr, "Manipulate FoundationDB object store using the command line.")
@@ -151,6 +155,7 @@ func usage() {
 	flag.PrintDefaults()
 }
 
+// List objects in object store
 func list(db fdb.Database, transactionTimeout int64, allBuckets bool, bucketName string, prefix string) {
 	_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 		tr.Options().SetTimeout(transactionTimeout)
@@ -244,6 +249,7 @@ func list(db fdb.Database, transactionTimeout int64, allBuckets bool, bucketName
 	}
 }
 
+// Delete objects from objects store using their names
 func delete(db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, names []string, finishChannel chan bool) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
@@ -298,6 +304,7 @@ func delete(db fdb.Database, transactionTimeout int64, batchPriority bool, bucke
 	}
 }
 
+// Delete objects from objects store using their unique identifiers
 func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids []string, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
@@ -463,6 +470,7 @@ func readChunks(chunk, chunkCount int64, idWithPrefix []byte, tr fdb.Transaction
 	return chunk
 }
 
+// Retrieve objects from objects store using their names
 func get(localName string, db fdb.Database, transactionTimeout int64, bucketName string, names []string, allowPartial, verbose bool, finishChannel chan int64) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
@@ -559,6 +567,7 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 	}
 }
 
+// Retrieve objects from objects store using their unique identifiers
 func getID(localName string, db fdb.Database, transactionTimeout int64, ids []string, verbose bool, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(id string) {
@@ -621,6 +630,7 @@ func getID(localName string, db fdb.Database, transactionTimeout int64, ids []st
 	}
 }
 
+// Add objects to objects store using their names
 func put(localName string, db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, uniqueNames map[string]bool, tags map[string]string, compressionAlgorithm int, verbose bool, finishChannel chan int64) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for name1 := range uniqueNames {
@@ -788,6 +798,7 @@ func compressionAlgoValue(compressionAlgorithm int) []byte {
 	return v
 }
 
+// Add objects to objects store using their unique identifiers
 func putID(localName string, db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, uniqueIds map[string]bool, tags map[string]string, compressionAlgorithm int, resume, verbose bool, finishChannel chan bool) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for id1 := range uniqueIds {
@@ -964,6 +975,7 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 	}
 }
 
+// Open connection to database
 func database(clusterFile string, datacenter string, machine string, verbose bool) fdb.Database {
 	fdb.MustAPIVersion(510)
 	var db fdb.Database
