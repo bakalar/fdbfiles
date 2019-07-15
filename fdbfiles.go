@@ -2,12 +2,12 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -138,7 +138,7 @@ func doCompress(filename string) bool {
 func usage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s [OPTION]... [COMMAND [NAME_OR_ID...]]\n\n", os.Args[0])
 	fmt.Fprintln(os.Stderr, "Manipulate FoundationDB object store using the command line.")
-	fmt.Fprintln(os.Stderr, "\nPossible commands include:")
+	fmt.Fprintln(os.Stderr, "\nCommands:")
 	fmt.Fprintln(os.Stderr, "\tlist\t\tlist objects; NAME is an optional prefix which listed objects must begin with")
 	fmt.Fprintln(os.Stderr, "\tput\t\tadd objects with given names")
 	fmt.Fprintln(os.Stderr, "\tput_id\t\tadd objects with given ids")
@@ -147,20 +147,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "\tresume\t\tresume adding objects with given ids - useful to continue a partial upload")
 	fmt.Fprintln(os.Stderr, "\tdelete\t\tdelete all objects with given names")
 	fmt.Fprintln(os.Stderr, "\tdelete_id\tdelete objects with given ids")
-	fmt.Fprintln(os.Stderr, "\noptions:")
-	fmt.Fprintln(os.Stderr, "\t--all_buckets\t\tshow all FoundationDB object store buckets when using list command")
-	fmt.Fprintln(os.Stderr, "\t--batch\t\t\tuse batch priority which is a lower priority than normal")
-	fmt.Fprintln(os.Stderr, "\t--bucket=BUCKET\t\tFoundationDB object store bucket to use (default: 'objectstorage1')")
-	fmt.Fprintln(os.Stderr, "\t--cluster_file=FILE\tuse FoundationDB cluster identified by the provided cluster file")
-	fmt.Fprintln(os.Stderr, "\t--compression=ALGO\tchoose compression algorithm: 'auto' (default), 'none' or 'lz4'")
-	fmt.Fprintln(os.Stderr, "\t--datacenter_id=ID\tdata center identifier key (up to 16 hex characters)")
-	fmt.Fprintln(os.Stderr, "\t--local=FILENAME\tlocal filename to use (use '-' to print to standard output)")
-	fmt.Fprintln(os.Stderr, "\t--machine_id=ID\t\tmachine identifier key (up to 16 hex characters) - defaults to a random value shared by all fdbserver processes on this machine")
-	fmt.Fprintln(os.Stderr, "\t--metadata=TAG=VAL\tadd the given TAG with a value VAL (may be used multiple times)")
-	fmt.Fprintln(os.Stderr, "\t--partial\t\tdon't skip a partially uploaded object when getting")
-	fmt.Fprintln(os.Stderr, "\t--timeout=MS\t\tuse this transaction timeout in milliseconds - default is 10000ms")
-	fmt.Fprintln(os.Stderr, "\t--verbose\t\tbe more verbose")
-	fmt.Fprintln(os.Stderr, "\t-v, --version\t\tprint the tool version and exit")
+	fmt.Fprintln(os.Stderr, "\nOptions:")
+	flag.PrintDefaults()
 }
 
 func list(db fdb.Database, transactionTimeout int64, allBuckets bool, bucketName string, prefix string) {
@@ -976,151 +964,117 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 	}
 }
 
-type dbParams struct {
-	clusterFile string
-	datacenter  string
-	machine     string
-	verbose     bool
-}
-
-func database(p dbParams) fdb.Database {
+func database(clusterFile string, datacenter string, machine string, verbose bool) fdb.Database {
 	fdb.MustAPIVersion(510)
 	var db fdb.Database
-	if p.clusterFile == "" {
+	if clusterFile == "" {
 		db = fdb.MustOpenDefault()
 	} else {
-		db = fdb.MustOpen(p.clusterFile, []byte("DB"))
-		if p.verbose {
-			fmt.Fprintf(os.Stderr, "Cluster file = %s\n", p.clusterFile)
+		db = fdb.MustOpen(clusterFile, []byte("DB"))
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Cluster file = %s\n", clusterFile)
 		}
 	}
 
-	if p.datacenter != "" {
-		db.Options().SetDatacenterId(p.datacenter)
-		if p.verbose {
-			fmt.Fprintf(os.Stderr, "Data center identifier key = %s\n", p.datacenter)
+	if datacenter != "" {
+		db.Options().SetDatacenterId(datacenter)
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Data center identifier key = %s\n", datacenter)
 		}
 	}
-	if p.machine != "" {
-		db.Options().SetMachineId(p.machine)
-		if p.verbose {
-			fmt.Fprintf(os.Stderr, "Machine identifier key = %s\n", p.machine)
+	if machine != "" {
+		db.Options().SetMachineId(machine)
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Machine identifier key = %s\n", machine)
 		}
 	}
 	return db
 }
 
+var allBuckets = flag.Bool("all_buckets", false, "Show all FoundationDB object store buckets when using list command")
+var batchPriority = flag.Bool("batch", false, "Use batch priority which is a lower priority than normal")
+var bucketName = flag.String("bucket", "objectstorage1", "FoundationDB object store bucket to use")
+var clusterFile = flag.String("cluster_file", "", "Use FoundationDB cluster identified by the provided cluster file")
+var algo = flag.String("compression", "auto", "Choose compression algorithm: auto, none or lz4")
+var dataCenterID = flag.String("datacenter_id", "", "Data center identifier key (up to 16 hex characters)")
+var help = flag.Bool("help", false, "Display usage info")
+var localName = flag.String("local", "", "Local filename to use (use '-' to print to standard output)")
+var machineID = flag.String("machine_id", "", "Machine identifier key (up to 16 hex characters) - defaults to a random value shared by all fdbserver processes on this machine")
+var metadata = flag.String("metadata", "", "Add the given TAG with a value VAL (may be used multiple times)")
+var allowPartial = flag.Bool("partial", false, "Don't skip a partially uploaded object when getting")
+var transactionTimeout = flag.Duration("timeout", time.Duration(10*1000*1000*1000), "Use this transaction timeout")
+var verbose = flag.Bool("verbose", false, "Be more verbose")
+var version = flag.Bool("version", false, "Print the tool version and exit")
+
+func init() {
+	//	flag.BoolVar(help, "h", false, "Display usage info")
+	//	flag.BoolVar(version, "v", false, "Be more verbose")
+	flag.BoolVar(help, "h", false, "")
+	flag.BoolVar(version, "v", false, "")
+}
+
 func main() {
-	if len(os.Args) < 2 || os.Args[1] == "--help" {
+	flag.Parse()
+	if *help {
 		usage()
 		return
 	}
-	if os.Args[1] == "-v" || os.Args[1] == "--version" {
+	if *version {
 		fmt.Printf("%s version 1.20180829\n\nCreated by Šimun Mikecin <numisemis@yahoo.com>.\n", os.Args[0])
 		return
 	}
-	var cmd string
-	bucketName := "objectstorage1"
-	var localName string
-	allBuckets := false
-	var params dbParams
 	var tags map[string]string
 	compressionAlgorithm := compressionAlgorithmAuto
-	var argsIndex int
-	allowPartial := false
-	batchPriority := false
-	var transactionTimeout int64 = 10000 // ms
-	for i := 1; i < len(os.Args); i++ {
-		if !strings.HasPrefix(os.Args[i], "-") {
-			cmd = os.Args[i]
-			i++
-			if i < len(os.Args) {
-				argsIndex = i
-			} else {
-				argsIndex = -1
-			}
-			break
-		}
-		if strings.HasPrefix(os.Args[i], "--all_buckets") {
-			allBuckets = true
-		}
-		if strings.HasPrefix(os.Args[i], "--batch") {
-			batchPriority = true
-		}
-		if strings.HasPrefix(os.Args[i], "--bucket=") {
-			bucketName = strings.SplitAfter(os.Args[i], "=")[1]
-		}
-		if strings.HasPrefix(os.Args[i], "--cluster_file=") {
-			params.clusterFile = strings.SplitAfter(os.Args[i], "=")[1]
-		}
-		if strings.HasPrefix(os.Args[i], "--compression=") {
-			algo := strings.SplitAfter(os.Args[i], "=")[1]
-			index := 0
-			for ; index < len(compressionAlgorithms); index++ {
-				if compressionAlgorithms[index] == algo {
-					compressionAlgorithm = index
-					break
-				}
-			}
-			if index == len(compressionAlgorithms) {
-				usage()
-				return
+	if *algo != "auto" {
+		index := 0
+		for ; index < len(compressionAlgorithms); index++ {
+			if compressionAlgorithms[index] == *algo {
+				compressionAlgorithm = index
+				break
 			}
 		}
-		if strings.HasPrefix(os.Args[i], "--datacenter_id=") {
-			params.datacenter = strings.SplitAfter(os.Args[i], "=")[1]
-		}
-		if strings.HasPrefix(os.Args[i], "--machine_id=") {
-			params.machine = strings.SplitAfter(os.Args[i], "=")[1]
-		}
-		if strings.HasPrefix(os.Args[i], "--metadata=") {
-			tag := strings.SplitAfter(os.Args[i], "=")[1]
-			value := strings.SplitAfter(os.Args[i], "=")[2]
-			tags[tag] = value
-		}
-		if strings.HasPrefix(os.Args[i], "--local=") {
-			localName = strings.SplitAfter(os.Args[i], "=")[1]
-		}
-		if strings.HasPrefix(os.Args[i], "--partial") {
-			allowPartial = true
-		}
-		if strings.HasPrefix(os.Args[i], "--timeout=") {
-			ms, err := strconv.Atoi(strings.SplitAfter(os.Args[i], "=")[1])
-			if err != nil {
-				panic(err)
-			}
-			transactionTimeout = int64(ms)
-		}
-		if strings.HasPrefix(os.Args[i], "--verbose") {
-			params.verbose = true
+		if index == len(compressionAlgorithms) {
+			usage()
+			return
 		}
 	}
+	if *metadata != "" {
+		tag := strings.SplitAfter(*metadata, "=")[1]
+		value := strings.SplitAfter(*metadata, "=")[2]
+		tags[tag] = value
+	}
 	var db fdb.Database
+	var msTimeout = transactionTimeout.Nanoseconds() / 1e6
+	if len(flag.Args()) == 0 {
+		usage()
+		return
+	}
+	cmd := flag.Arg(0)
 	switch cmd {
 	case "list":
-		db = database(params)
+		db = database(*clusterFile, *dataCenterID, *machineID, *verbose)
 		var prefix string
-		if argsIndex >= 0 {
-			prefix = os.Args[argsIndex]
+		if len(flag.Args()) > 1 {
+			prefix = flag.Arg(1)
 		}
-		list(db, transactionTimeout, allBuckets, bucketName, prefix)
+		list(db, msTimeout, *allBuckets, *bucketName, prefix)
 	case "put":
-		if argsIndex < 0 {
+		if len(flag.Args()) == 1 {
 			usage()
 		} else {
-			db = database(params)
+			db = database(*clusterFile, *dataCenterID, *machineID, *verbose)
 			uniqueNames := make(map[string]bool)
-			for _, val := range os.Args[argsIndex:] {
+			for _, val := range flag.Args()[1:] {
 				uniqueNames[val] = true
 			}
 			finishChannel := make(chan int64)
 			timeStarted := time.Now()
-			put(localName, db, transactionTimeout, batchPriority, bucketName, uniqueNames, tags, compressionAlgorithm, params.verbose, finishChannel)
+			put(*localName, db, msTimeout, *batchPriority, *bucketName, uniqueNames, tags, compressionAlgorithm, *verbose, finishChannel)
 			var totalBytes int64
 			for range uniqueNames {
 				totalBytes += <-finishChannel
 			}
-			if params.verbose {
+			if *verbose {
 				elapsed := time.Since(timeStarted)
 				var manySuffix string
 				count := len(uniqueNames)
@@ -1131,36 +1085,36 @@ func main() {
 			}
 		}
 	case "put_id", "resume":
-		if argsIndex < 0 {
+		if len(flag.Args()) == 1 {
 			usage()
 		} else {
-			db = database(params)
+			db = database(*clusterFile, *dataCenterID, *machineID, *verbose)
 			uniqueNames := make(map[string]bool)
-			for _, val := range os.Args[argsIndex:] {
+			for _, val := range flag.Args()[1:] {
 				uniqueNames[val] = true
 			}
 			finishChannel := make(chan bool)
-			putID(localName, db, transactionTimeout, batchPriority, bucketName, uniqueNames, tags, compressionAlgorithm, cmd == "resume", params.verbose, finishChannel)
+			putID(*localName, db, msTimeout, *batchPriority, *bucketName, uniqueNames, tags, compressionAlgorithm, cmd == "resume", *verbose, finishChannel)
 			for range uniqueNames {
 				<-finishChannel
 			}
 		}
 	case "get":
-		if argsIndex < 0 {
+		if len(flag.Args()) == 1 {
 			usage()
 		} else {
-			db = database(params)
+			db = database(*clusterFile, *dataCenterID, *machineID, *verbose)
 			finishChannel := make(chan int64)
 			timeStarted := time.Now()
-			get(localName, db, transactionTimeout, bucketName, os.Args[argsIndex:], allowPartial, params.verbose, finishChannel)
+			get(*localName, db, msTimeout, *bucketName, flag.Args()[1:], *allowPartial, *verbose, finishChannel)
 			var totalBytes int64
-			for index := argsIndex; index < len(os.Args); index++ {
+			for range flag.Args()[1:] {
 				totalBytes += <-finishChannel
 			}
-			if params.verbose {
+			if *verbose {
 				elapsed := time.Since(timeStarted)
 				var manySuffix string
-				count := len(os.Args[argsIndex:])
+				count := len(flag.Args()[1:])
 				if count > 1 {
 					manySuffix = "s"
 				}
@@ -1168,35 +1122,35 @@ func main() {
 			}
 		}
 	case "get_id":
-		if argsIndex < 0 {
+		if len(flag.Args()) == 1 {
 			usage()
 		} else {
-			db = database(params)
+			db = database(*clusterFile, *dataCenterID, *machineID, *verbose)
 			finishChannel := make(chan bool)
-			getID(localName, db, transactionTimeout, os.Args[argsIndex:], params.verbose, finishChannel)
-			for index := argsIndex; index < len(os.Args); index++ {
+			getID(*localName, db, msTimeout, flag.Args()[1:], *verbose, finishChannel)
+			for range flag.Args()[1:] {
 				<-finishChannel
 			}
 		}
 	case "delete":
-		if argsIndex < 0 {
+		if len(flag.Args()) == 1 {
 			usage()
 		} else {
-			db = database(params)
+			db = database(*clusterFile, *dataCenterID, *machineID, *verbose)
 			finishChannel := make(chan bool)
-			delete(db, transactionTimeout, batchPriority, bucketName, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index++ {
+			delete(db, msTimeout, *batchPriority, *bucketName, flag.Args()[1:], finishChannel)
+			for range flag.Args()[1:] {
 				<-finishChannel
 			}
 		}
 	case "delete_id":
-		if argsIndex < 0 {
+		if len(flag.Args()) == 1 {
 			usage()
 		} else {
-			db = database(params)
+			db = database(*clusterFile, *dataCenterID, *machineID, *verbose)
 			finishChannel := make(chan bool)
-			deleteID(db, transactionTimeout, batchPriority, os.Args[argsIndex:], finishChannel)
-			for index := argsIndex; index < len(os.Args); index++ {
+			deleteID(db, msTimeout, *batchPriority, flag.Args()[1:], finishChannel)
+			for range flag.Args()[1:] {
 				<-finishChannel
 			}
 		}
