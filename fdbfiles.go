@@ -14,6 +14,7 @@ import (
 	"github.com/apple/foundationdb/bindings/go/src/fdb"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/directory"
 	"github.com/apple/foundationdb/bindings/go/src/fdb/tuple"
+	"github.com/google/uuid"
 	"github.com/hungys/go-lz4"
 	"gopkg.in/mgo.v2/bson"
 )
@@ -155,6 +156,32 @@ func usage() {
 	flag.PrintDefaults()
 }
 
+func uniqueID(bytes []byte) (id any, err error) {
+	idIsBSONObjectID := len(bytes) == 12
+	if idIsBSONObjectID {
+		oid := bson.ObjectId(bytes)
+		id = idWithLoadBalancingPrefix(oid)
+	} else {
+		id = tuple.UUID(bytes)
+	}
+	return
+}
+
+func uniqueIDFromString(s string) (id any, err error) {
+	idIsBSONObjectID := len(s) == 24
+	if idIsBSONObjectID {
+		return uniqueID([]byte(bson.ObjectIdHex(s)))
+	}
+
+	var u uuid.UUID
+	u, err = uuid.Parse(s)
+	if err == nil {
+		return uniqueID(u[:])
+	}
+
+	return
+}
+
 // List objects in object store
 func list(db fdb.Database, transactionTimeout int64, allBuckets bool, bucketName string, prefix string) {
 	_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
@@ -194,16 +221,18 @@ func list(db fdb.Database, transactionTimeout int64, allBuckets bool, bucketName
 				kv := ri.MustGet()
 				t, _ := tuple.Unpack(kv.Key)
 				if t[2] != "count" {
-					_id := bson.ObjectId(kv.Value)
-					idWithPrefix := idWithLoadBalancingPrefix(_id)
+					id, err := uniqueID(kv.Value)
+					if err != nil {
+						panic(err)
+					}
 
-					lengthKey := objectDir.Pack(tuple.Tuple{idWithPrefix, "len"})
+					lengthKey := objectDir.Pack(tuple.Tuple{id, "len"})
 					lengthValueFuture := tr.Get(lengthKey)
 
-					partialKey := objectDir.Pack(tuple.Tuple{idWithPrefix, "partial"})
+					partialKey := objectDir.Pack(tuple.Tuple{id, "partial"})
 					partialValueFuture := tr.Get(partialKey)
 
-					uploadDateKey := objectDir.Pack(tuple.Tuple{idWithPrefix, "meta", "uploadDate"})
+					uploadDateKey := objectDir.Pack(tuple.Tuple{id, "meta", "uploadDate"})
 					uploadDateFuture := tr.Get(uploadDateKey)
 
 					v, err := tuple.Unpack(lengthValueFuture.MustGet())
@@ -233,12 +262,19 @@ func list(db fdb.Database, transactionTimeout int64, allBuckets bool, bucketName
 							uploadDate = time.Unix(ns/1e9, ns%1e9)
 						}
 					}
+
+					var oidPtr *bson.ObjectId
+					if _, ok := id.(tuple.UUID); !ok {
+						oid := bson.ObjectId(id.([]byte)[1:])
+						oidPtr = &oid
+						id = oid
+					}
 					if uploadDateValue == nil {
-						uploadDate = _id.Time()
+						uploadDate = oidPtr.Time()
 					}
 					name := t[1]
 					revision := t[2].(int64)
-					fmt.Printf("%s %s\t%d\t%s %d\t%s%s\n", _id, bucketName1, revision, uploadDate.Format("2006-01-02T15:04:05.000000000-0700"), length, name, partialMark)
+					fmt.Printf("%s %s\t%d\t%s %d\t%s%s\n", id, bucketName1, revision, uploadDate.Format("2006-01-02T15:04:05.000000000-0700"), length, name, partialMark)
 				}
 			}
 		}
@@ -284,8 +320,11 @@ func delete(db fdb.Database, transactionTimeout int64, batchPriority bool, bucke
 				ri := tr.GetRange(keyRange, fdb.RangeOptions{}).Iterator()
 				for ri.Advance() {
 					kv := ri.MustGet()
-					_id := bson.ObjectId(kv.Value)
-					objectPrefixKey := objectDir.Pack(tuple.Tuple{idWithLoadBalancingPrefix(_id)})
+					id, err := uniqueID(kv.Value)
+					if err != nil {
+						panic(err)
+					}
+					objectPrefixKey := objectDir.Pack(tuple.Tuple{id})
 					objectPrefixRange, err := fdb.PrefixRange(objectPrefixKey)
 					if err != nil {
 						continue // Object already deleted.
@@ -307,8 +346,11 @@ func delete(db fdb.Database, transactionTimeout int64, batchPriority bool, bucke
 // Delete objects from objects store using their unique identifiers
 func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids []string, finishChannel chan bool) {
 	for _, id1 := range ids {
-		go func(id string) {
-			idWithPrefix := idWithLoadBalancingPrefix(bson.ObjectIdHex(id))
+		go func(idString string) {
+			id, err := uniqueIDFromString(idString)
+			if err != nil {
+				panic(err)
+			}
 			_, e := db.Transact(func(tr fdb.Transaction) (interface{}, error) {
 				tr.Options().SetTimeout(transactionTimeout)
 				if batchPriority {
@@ -319,9 +361,9 @@ func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids
 					panic(err)
 				}
 
-				bucketNameFuture := tr.Get(objectDir.Pack(tuple.Tuple{idWithPrefix, "bucket"}))
-				nameFuture := tr.Get(objectDir.Pack(tuple.Tuple{idWithPrefix, "name"}))
-				ndxFuture := tr.Get(objectDir.Pack(tuple.Tuple{idWithPrefix, "ndx"}))
+				bucketNameFuture := tr.Get(objectDir.Pack(tuple.Tuple{id, "bucket"}))
+				nameFuture := tr.Get(objectDir.Pack(tuple.Tuple{id, "name"}))
+				ndxFuture := tr.Get(objectDir.Pack(tuple.Tuple{id, "ndx"}))
 
 				bucketName := string(bucketNameFuture.MustGet())
 				indexDir, err := directory.Open(tr, append(nameIndexDirPrefix, bucketName), nil)
@@ -361,7 +403,7 @@ func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids
 					tr.Clear(countKey)
 				}
 
-				objectPrefixRange, err := fdb.PrefixRange(objectDir.Pack(tuple.Tuple{idWithPrefix}))
+				objectPrefixRange, err := fdb.PrefixRange(objectDir.Pack(tuple.Tuple{id}))
 				tr.ClearRange(objectPrefixRange)
 
 				indexPrefixRange, err := fdb.PrefixRange(indexDir.Pack(tuple.Tuple{name, int64(index)}))
@@ -385,7 +427,7 @@ func uncompressedTail(length int64) int {
 	return uncompressedSize
 }
 
-func readChunks(chunk, chunkCount int64, idWithPrefix []byte, tr fdb.Transaction, dir directory.DirectorySubspace, tailByteCount int, print bool, f *os.File) int64 {
+func readChunks(chunk, chunkCount int64, id any, tr fdb.Transaction, dir directory.DirectorySubspace, tailByteCount int, print bool, f *os.File) int64 {
 	if chunk < chunkCount {
 		var thisTransactionEndChunkIndex int64
 		if print {
@@ -394,8 +436,8 @@ func readChunks(chunk, chunkCount int64, idWithPrefix []byte, tr fdb.Transaction
 			thisTransactionEndChunkIndex = chunk + chunksPerTransaction
 		}
 		range2 := fdb.KeyRange{
-			Begin: dir.Pack(tuple.Tuple{idWithPrefix, chunk}),
-			End:   dir.Pack(tuple.Tuple{idWithPrefix, thisTransactionEndChunkIndex}),
+			Begin: dir.Pack(tuple.Tuple{id, chunk}),
+			End:   dir.Pack(tuple.Tuple{id, thisTransactionEndChunkIndex}),
 		}
 		ri := tr.GetRange(range2, fdb.RangeOptions{}).Iterator()
 		var bytes []byte
@@ -480,9 +522,9 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 			var tailByteCount int
 			var f *os.File
 			var idWithPrefix []byte
-			print := localName == "-"
+			doPrint := localName == "-"
 			var chunk int64
-			if !print {
+			if !doPrint {
 				var path string
 				if localName == "/dev/null" || (len(names) == 1 && len(localName) > 0) {
 					path = localName
@@ -525,17 +567,20 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 								// This version doesn't exist.
 								continue
 							}
-							idWithPrefix = idWithLoadBalancingPrefix(bson.ObjectId(idBytes))
+							id, err := uniqueID(idBytes)
+							if err != nil {
+								panic(err)
+							}
 							var isValid bool
 							if allowPartial {
 								isValid = true
 							} else {
-								partialKey := dir.Pack(tuple.Tuple{idWithPrefix, "partial"})
+								partialKey := dir.Pack(tuple.Tuple{id, "partial"})
 								partialValueFuture := tr.Get(partialKey)
 								isValid = partialValueFuture.MustGet() == nil
 							}
 							if isValid {
-								lengthKey := dir.Pack(tuple.Tuple{idWithPrefix, "len"})
+								lengthKey := dir.Pack(tuple.Tuple{id, "len"})
 								lengthFuture := tr.Get(lengthKey)
 								lengthValue := lengthFuture.MustGet()
 								v, err := tuple.Unpack(lengthValue)
@@ -549,7 +594,7 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 							}
 						}
 					}
-					chunk = readChunks(chunk, chunkCount, idWithPrefix, tr, dir, tailByteCount, print, f)
+					chunk = readChunks(chunk, chunkCount, idWithPrefix, tr, dir, tailByteCount, doPrint, f)
 					return nil, nil
 				})
 				if e != nil {
@@ -570,20 +615,24 @@ func get(localName string, db fdb.Database, transactionTimeout int64, bucketName
 // Retrieve objects from objects store using their unique identifiers
 func getID(localName string, db fdb.Database, transactionTimeout int64, ids []string, verbose bool, finishChannel chan bool) {
 	for _, id1 := range ids {
-		go func(id string) {
-			idWithPrefix := idWithLoadBalancingPrefix(bson.ObjectIdHex(id))
+		go func(idString string) {
+			id, err := uniqueIDFromString(idString)
+			if err != nil {
+				panic(err)
+			}
+
 			var length int64
 			var chunkCount int64
 			var tailByteCount int
 			var f *os.File
-			print := localName == "-"
+			doPrint := localName == "-"
 			var chunk int64
-			if !print {
+			if !doPrint {
 				var path string
 				if len(ids) == 1 && len(localName) > 0 {
 					path = localName
 				} else {
-					path = id
+					path = idString
 				}
 				var err error
 				f, err = os.Create(path)
@@ -602,7 +651,7 @@ func getID(localName string, db fdb.Database, transactionTimeout int64, ids []st
 					}
 
 					if chunk == 0 {
-						lengthKey := dir.Pack(tuple.Tuple{idWithPrefix, "len"})
+						lengthKey := dir.Pack(tuple.Tuple{id, "len"})
 						v, err := tuple.Unpack(tr.Get(lengthKey).MustGet())
 						if err != nil {
 							panic(err)
@@ -611,7 +660,7 @@ func getID(localName string, db fdb.Database, transactionTimeout int64, ids []st
 						chunkCount = lengthToChunkCount(length)
 						tailByteCount = uncompressedTail(length)
 					}
-					chunk = readChunks(chunk, chunkCount, idWithPrefix, tr, dir, tailByteCount, print, f)
+					chunk = readChunks(chunk, chunkCount, id, tr, dir, tailByteCount, doPrint, f)
 					return nil, nil
 				})
 				if e != nil {
@@ -656,7 +705,7 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 			var totalWritten int64
 			var totalWrittenCompressed int64
 
-			var idWithPrefix []byte
+			var id tuple.UUID
 
 			contentBuffer := make([]byte, chunkSize)
 			var chunk int64
@@ -692,14 +741,14 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 					if chunk == 0 {
 						var nameKey fdb.KeyConvertible
 						for {
-							idWithPrefix = idWithLoadBalancingPrefix(bson.NewObjectId())
-							nameKey = dir.Pack(tuple.Tuple{idWithPrefix, "name"})
+							id = tuple.UUID(uuid.New())
+							nameKey = dir.Pack(tuple.Tuple{id, "name"})
 							if tr.Get(nameKey).MustGet() == nil {
 								break
 							}
 						}
 						tr.Set(nameKey, []byte(filename))
-						tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "bucket"}), []byte(bucketName))
+						tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
 
 						indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
 						countTuple := tuple.Tuple{filename, "count"}
@@ -712,14 +761,14 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 							oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
 						}
 						tr.Add(countKey, one)
-						tr.Set(indexDir.Pack(tuple.Tuple{filename, oldCount}), idWithPrefix[1:])
+						tr.Set(indexDir.Pack(tuple.Tuple{filename, oldCount}), id[:])
 						if multipleTransactions {
-							tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "partial"}), []byte{})
+							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						}
-						tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "ndx"}), tuple.Tuple{oldCount}.Pack())
-						tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
+						tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+						tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
 						for key, value := range tags {
-							tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "meta", key}), []byte(value))
+							tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
 						}
 					}
 					if totalSize > 0 {
@@ -735,17 +784,17 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 							data := contentBuffer[:n]
 							switch myCompressionAlgorithm {
 							case compressionAlgorithmNone:
-								tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, chunk}), data)
+								tr.Set(dir.Pack(tuple.Tuple{id, chunk}), data)
 							case compressionAlgorithmLZ4:
 								var compressedByteCount int
 								compressedByteCount, err = lz4.CompressDefault(data, lz4CompressedBytes)
 								if err != nil {
 									panic(err)
 								}
-								chunkKey := dir.Pack(tuple.Tuple{idWithPrefix, chunk})
+								chunkKey := dir.Pack(tuple.Tuple{id, chunk})
 								if compressedByteCount < n {
 									tr.Set(chunkKey, lz4CompressedBytes[:compressedByteCount])
-									tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, chunk, "c"}), compressionAlgoValue)
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
 									totalWrittenCompressed += int64(compressedByteCount)
 								} else {
 									tr.Set(chunkKey, data)
@@ -759,10 +808,10 @@ func put(localName string, db fdb.Database, transactionTimeout int64, batchPrior
 							}
 						}
 					}
-					tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "len"}), tuple.Tuple{totalWritten}.Pack())
+					tr.Set(dir.Pack(tuple.Tuple{id, "len"}), tuple.Tuple{totalWritten}.Pack())
 					if chunk == chunkCount && multipleTransactions {
 						// Last transaction
-						tr.Clear(dir.Pack(tuple.Tuple{idWithPrefix, "partial"}))
+						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
 					return nil, nil
 				})
@@ -803,7 +852,11 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for id1 := range uniqueIds {
 		go func(idString string) {
-			idWithPrefix := idWithLoadBalancingPrefix(bson.ObjectIdHex(idString))
+			id, err := uuid.Parse(idString)
+			if err != nil {
+				panic(err)
+			}
+
 			var filename string
 			if len(uniqueIds) == 1 && len(localName) > 0 {
 				filename = localName
@@ -856,9 +909,9 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 					if err != nil {
 						panic(err)
 					}
-					lenKey := dir.Pack(tuple.Tuple{idWithPrefix, "len"})
+					lenKey := dir.Pack(tuple.Tuple{id, "len"})
 					if chunk == 0 {
-						nameKey := dir.Pack(tuple.Tuple{idWithPrefix, "name"})
+						nameKey := dir.Pack(tuple.Tuple{id, "name"})
 						if !resume && tr.Get(nameKey).MustGet() != nil {
 							panic("Object with given id already exists!")
 						} else if resume && tr.Get(nameKey).MustGet() == nil {
@@ -884,7 +937,7 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 							removePartial = true
 						} else {
 							tr.Set(nameKey, []byte(filename))
-							tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "bucket"}), []byte(bucketName))
+							tr.Set(dir.Pack(tuple.Tuple{id, "bucket"}), []byte(bucketName))
 
 							indexDir, _ := directory.CreateOrOpen(tr, indexDirPath, nil)
 							countTuple := tuple.Tuple{filename, "count"}
@@ -897,17 +950,17 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 								oldCount = int64(binary.LittleEndian.Uint64(oldCountValue))
 							}
 							tr.Add(countKey, one)
-							tr.Set(indexDir.Pack(tuple.Tuple{filename, oldCount}), idWithPrefix[1:])
-							tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "ndx"}), tuple.Tuple{oldCount}.Pack())
-							tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
+							tr.Set(indexDir.Pack(tuple.Tuple{filename, oldCount}), id[:])
+							tr.Set(dir.Pack(tuple.Tuple{id, "ndx"}), tuple.Tuple{oldCount}.Pack())
+							tr.Set(dir.Pack(tuple.Tuple{id, "meta", "uploadDate"}), tuple.Tuple{time.Now().UnixNano()}.Pack())
 							for key, value := range tags {
-								tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "meta", key}), []byte(value))
+								tr.Set(dir.Pack(tuple.Tuple{id, "meta", key}), []byte(value))
 							}
 							removePartial = chunkCount > chunksPerTransaction
 						}
 						setPartial = (chunkCount - chunk) > chunksPerTransaction
 						if setPartial {
-							tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, "partial"}), []byte{})
+							tr.Set(dir.Pack(tuple.Tuple{id, "partial"}), []byte{})
 						}
 					}
 					if (totalSize - totalWritten) > 0 {
@@ -921,7 +974,7 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 								panic("Failed writing chunk.")
 							}
 							data := contentBuffer[:n]
-							chunkKey := dir.Pack(tuple.Tuple{idWithPrefix, chunk})
+							chunkKey := dir.Pack(tuple.Tuple{id, chunk})
 							switch myCompressionAlgorithm {
 							case compressionAlgorithmNone:
 								tr.Set(chunkKey, data)
@@ -933,7 +986,7 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 								}
 								if compressedByteCount < n {
 									tr.Set(chunkKey, lz4CompressedBytes[:compressedByteCount])
-									tr.Set(dir.Pack(tuple.Tuple{idWithPrefix, chunk, "c"}), compressionAlgoValue)
+									tr.Set(dir.Pack(tuple.Tuple{id, chunk, "c"}), compressionAlgoValue)
 									totalWrittenCompressed += int64(compressedByteCount)
 								} else {
 									tr.Set(chunkKey, data)
@@ -950,7 +1003,7 @@ func putID(localName string, db fdb.Database, transactionTimeout int64, batchPri
 					tr.Set(lenKey, tuple.Tuple{totalWritten}.Pack())
 					if removePartial && chunk == chunkCount {
 						// Last transaction
-						tr.Clear(dir.Pack(tuple.Tuple{idWithPrefix, "partial"}))
+						tr.Clear(dir.Pack(tuple.Tuple{id, "partial"}))
 					}
 					return nil, nil
 				})

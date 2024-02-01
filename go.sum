@@ -1,7 +1,7 @@
 github.com/apple/foundationdb/bindings/go v0.0.0-20230811110656-f2742562ee28 h1:RJH0BZgGtFfETA836lmwwWSsS7PEUa8lfyecB0iRdac=
 github.com/apple/foundationdb/bindings/go v0.0.0-20230811110656-f2742562ee28/go.mod h1:OMVSB21p9+xQUIqlGizHPZfjK+SHws1ht+ZytVDoz9U=
-github.com/apple/foundationdb/bindings/go v0.0.0-20230926000446-59e1470263ce h1:wCRY81dekbgnEA+VKgMUrKcAY/BkblrvU6cmJIVhq1o=
-github.com/apple/foundationdb/bindings/go v0.0.0-20230926000446-59e1470263ce/go.mod h1:OMVSB21p9+xQUIqlGizHPZfjK+SHws1ht+ZytVDoz9U=
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/hungys/go-lz4 v0.0.0-20170805124057-19ff7f07f099 h1:heHZCso/ytvpYr+hp2cDxlZfA/jTw46aHSvT9kZnJ7o=
 github.com/hungys/go-lz4 v0.0.0-20170805124057-19ff7f07f099/go.mod h1:h44tqw4M3GN0Woo9KBStxJxm8huNi+9+tOHoeqSvhaY=
 github.com/kr/pretty v0.2.1 h1:Fmg33tUaq4/8ym9TJN1x7sLJnHVwhP33CNkpYV/7rwI=
