@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	chunkSize            = 1e5
-	chunksPerTransaction = 99
+	chunkSize            = 1e4
+	chunksPerTransaction = 999
 
 	compressionAlgorithmAuto = -1
 	compressionAlgorithmNone = 0
