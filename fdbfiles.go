@@ -1,3 +1,4 @@
+// fdbfiles CLI tool
 package main
 
 import (
@@ -285,8 +286,8 @@ func list(db fdb.Database, transactionTimeout int64, allBuckets bool, bucketName
 	}
 }
 
-// Delete objects from objects store using their names
-func delete(db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, names []string, finishChannel chan bool) {
+// Remove objects from objects store using their names
+func remove(db fdb.Database, transactionTimeout int64, batchPriority bool, bucketName string, names []string, finishChannel chan bool) {
 	indexDirPath := append(nameIndexDirPrefix, bucketName)
 	for _, name1 := range names {
 		go func(name string) {
@@ -343,8 +344,8 @@ func delete(db fdb.Database, transactionTimeout int64, batchPriority bool, bucke
 	}
 }
 
-// Delete objects from objects store using their unique identifiers
-func deleteID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids []string, finishChannel chan bool) {
+// Remove objects from objects store using their unique identifiers
+func removeID(db fdb.Database, transactionTimeout int64, batchPriority bool, ids []string, finishChannel chan bool) {
 	for _, id1 := range ids {
 		go func(idString string) {
 			id, err := uniqueIDFromString(idString)
@@ -1203,7 +1204,7 @@ func main() {
 		} else {
 			db = database(*clusterFile, *dataCenterID, *machineID, *verbose)
 			finishChannel := make(chan bool)
-			delete(db, msTimeout, *batchPriority, *bucketName, flag.Args()[1:], finishChannel)
+			remove(db, msTimeout, *batchPriority, *bucketName, flag.Args()[1:], finishChannel)
 			for range flag.Args()[1:] {
 				<-finishChannel
 			}
@@ -1214,7 +1215,7 @@ func main() {
 		} else {
 			db = database(*clusterFile, *dataCenterID, *machineID, *verbose)
 			finishChannel := make(chan bool)
-			deleteID(db, msTimeout, *batchPriority, flag.Args()[1:], finishChannel)
+			removeID(db, msTimeout, *batchPriority, flag.Args()[1:], finishChannel)
 			for range flag.Args()[1:] {
 				<-finishChannel
 			}
