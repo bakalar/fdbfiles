@@ -21,8 +21,8 @@ import (
 )
 
 const (
-	chunkSize            = 1e4
-	chunksPerTransaction = 999
+	chunkSize            = 10000 // for best performance, values should be less than 10kB
+	chunksPerTransaction = 99  // keep transaction size up to 1MB to avoid performance issues
 
 	compressionAlgorithmAuto = -1
 	compressionAlgorithmNone = 0
